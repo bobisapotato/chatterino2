@@ -55,7 +55,8 @@ HighlightingPage::HighlightingPage()
                                     &getSettings()->highlightedMessages))
                         .getElement();
                 view->addRegexHelpLink();
-                view->setTitles({"Pattern", "Flash\ntaskbar", "Play\nsound",
+                view->setTitles({"Pattern", "Show in\nMentions",
+                                 "Flash\ntaskbar", "Play\nsound",
                                  "Enable\nregex", "Case-\nsensitive",
                                  "Custom\nsound", "Color"});
                 view->getTableView()->horizontalHeader()->setSectionResizeMode(
@@ -72,7 +73,7 @@ HighlightingPage::HighlightingPage()
 
                 view->addButtonPressed.connect([] {
                     getSettings()->highlightedMessages.append(HighlightPhrase{
-                        "my phrase", true, false, false, false, "",
+                        "my phrase", true, true, false, false, false, "",
                         *ColorProvider::instance().color(
                             ColorType::SelfHighlight)});
                 });
@@ -102,7 +103,8 @@ HighlightingPage::HighlightingPage()
 
                 // Case-sensitivity doesn't make sense for user names so it is
                 // set to "false" by default & the column is hidden
-                view->setTitles({"Username", "Flash\ntaskbar", "Play\nsound",
+                view->setTitles({"Username", "Show in\nMentions",
+                                 "Flash\ntaskbar", "Play\nsound",
                                  "Enable\nregex", "Case-\nsensitive",
                                  "Custom\nsound", "Color"});
                 view->getTableView()->horizontalHeader()->setSectionResizeMode(
@@ -119,7 +121,7 @@ HighlightingPage::HighlightingPage()
 
                 view->addButtonPressed.connect([] {
                     getSettings()->highlightedUsers.append(HighlightPhrase{
-                        "highlighted user", true, false, false, false, "",
+                        "highlighted user", true, true, false, false, false, "",
                         *ColorProvider::instance().color(
                             ColorType::SelfHighlight)});
                 });
@@ -227,28 +229,28 @@ void HighlightingPage::tableCellClicked(const QModelIndex &clicked,
                                       Qt::CheckStateRole);
         }
     }
-    else if (clicked.column() == Column::Color &&
-             clicked.row() != HighlightModel::WHISPER_ROW)
+    else if (clicked.column() == Column::Color)
     {
+        // Hacky (?) way to figure out what tab the cell was clicked in
+        const bool fromMessagesTab =
+            (dynamic_cast<HighlightModel *>(view->getModel()) != nullptr);
+
+        if (fromMessagesTab && clicked.row() == HighlightModel::WHISPER_ROW)
+            return;
+
         auto initial =
             view->getModel()->data(clicked, Qt::DecorationRole).value<QColor>();
 
         auto dialog = new ColorPickerDialog(initial, this);
         dialog->setAttribute(Qt::WA_DeleteOnClose);
         dialog->show();
-        dialog->closed.connect([=] {
-            QColor selected = dialog->selectedColor();
-
+        dialog->closed.connect([=](QColor selected) {
             if (selected.isValid())
             {
                 view->getModel()->setData(clicked, selected,
                                           Qt::DecorationRole);
 
-                // Hacky (?) way to figure out what tab the cell was clicked in
-                const bool fromMessages = (dynamic_cast<HighlightModel *>(
-                                               view->getModel()) != nullptr);
-
-                if (fromMessages)
+                if (fromMessagesTab)
                 {
                     /*
                      * For preset highlights in the "Messages" tab, we need to

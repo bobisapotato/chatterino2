@@ -18,7 +18,7 @@
 #include <QLinearGradient>
 #include <QMimeData>
 #include <QPainter>
-#include <boost/bind.hpp>
+#include <boost/bind/bind.hpp>
 
 namespace chatterino {
 namespace {
@@ -46,23 +46,30 @@ NotebookTab::NotebookTab(Notebook *notebook)
     getSettings()->showTabCloseButton.connectSimple(
         boost::bind(&NotebookTab::hideTabXChanged, this),
         this->managedConnections_);
-    getSettings()->showTabLive.connect([this](auto, auto) { this->update(); },
-                                       this->managedConnections_);
+    getSettings()->showTabLive.connect(
+        [this](auto, auto) {
+            this->update();
+        },
+        this->managedConnections_);
 
     this->setMouseTracking(true);
 
-    this->menu_.addAction("Rename", [this]() { this->showRenameDialog(); });
+    this->menu_.addAction("Rename", [this]() {
+        this->showRenameDialog();
+    });
 
-    this->menu_.addAction("Close",
-                          [=]() { this->notebook_->removePage(this->page); });
+    this->menu_.addAction("Close", [=]() {
+        this->notebook_->removePage(this->page);
+    });
 
     highlightNewMessagesAction_ =
         new QAction("Enable highlights on new messages", &this->menu_);
     highlightNewMessagesAction_->setCheckable(true);
     highlightNewMessagesAction_->setChecked(highlightEnabled_);
-    QObject::connect(
-        highlightNewMessagesAction_, &QAction::triggered,
-        [this](bool checked) { this->highlightEnabled_ = checked; });
+    QObject::connect(highlightNewMessagesAction_, &QAction::triggered,
+                     [this](bool checked) {
+                         this->highlightEnabled_ = checked;
+                     });
     this->menu_.addAction(highlightNewMessagesAction_);
 }
 
@@ -89,7 +96,20 @@ void NotebookTab::themeChangedEvent()
     this->setMouseEffectColor(this->theme->tabs.regular.text);
 }
 
-void NotebookTab::updateSize()
+void NotebookTab::growWidth(int width)
+{
+    if (this->growWidth_ != width)
+    {
+        this->growWidth_ = width;
+        this->updateSize();
+    }
+    else
+    {
+        this->growWidth_ = width;
+    }
+}
+
+int NotebookTab::normalTabWidth()
 {
     float scale = this->scale();
     int width;
@@ -114,7 +134,20 @@ void NotebookTab::updateSize()
     {
         width = clamp(width, this->height(), int(150 * scale));
     }
+
+    return width;
+}
+
+void NotebookTab::updateSize()
+{
+    float scale = this->scale();
+    int width = this->normalTabWidth();
     auto height = int(NOTEBOOK_TAB_HEIGHT * scale);
+
+    if (width < this->growWidth_)
+    {
+        width = this->growWidth_;
+    }
 
     if (this->width() != width || this->height() != height)
     {
@@ -175,7 +208,7 @@ void NotebookTab::titleUpdated()
 {
     // Queue up save because: Tab title changed
     getApp()->windows->queueSave();
-
+    this->notebook_->performLayout();
     this->updateSize();
     this->update();
 }
@@ -440,7 +473,7 @@ void NotebookTab::mousePressEvent(QMouseEvent *event)
         switch (event->button())
         {
             case Qt::RightButton: {
-                this->menu_.popup(event->globalPos());
+                this->menu_.popup(event->globalPos() + QPoint(0, 8));
             }
             break;
             default:;
@@ -533,7 +566,7 @@ void NotebookTab::dragEnterEvent(QDragEnterEvent *event)
 void NotebookTab::mouseMoveEvent(QMouseEvent *event)
 {
     if (getSettings()->showTabCloseButton &&
-        this->notebook_->getAllowUserTabManagement())  //
+        this->notebook_->getAllowUserTabManagement())
     {
         bool overX = this->getXRect().contains(event->pos());
 
@@ -549,7 +582,7 @@ void NotebookTab::mouseMoveEvent(QMouseEvent *event)
     QPoint relPoint = this->mapToParent(event->pos());
 
     if (this->mouseDown_ && !this->getDesiredRect().contains(relPoint) &&
-        this->notebook_->getAllowUserTabManagement())  //
+        this->notebook_->getAllowUserTabManagement())
     {
         int index;
         QWidget *clickedPage =

@@ -5,7 +5,6 @@
 #include <QString>
 #include <QStringList>
 #include <QUrlQuery>
-#include <boost/noncopyable.hpp>
 
 #include <functional>
 
@@ -24,27 +23,9 @@ struct KrakenChannel {
     }
 };
 
-struct KrakenUser {
-    const QString createdAt;
-
-    KrakenUser(QJsonObject jsonObject)
-        : createdAt(jsonObject.value("created_at").toString())
-    {
-    }
-};
-
 class Kraken final : boost::noncopyable
 {
 public:
-    // https://dev.twitch.tv/docs/v5/reference/users#follow-channel
-    void getChannel(QString userId,
-                    ResultCallback<KrakenChannel> resultCallback,
-                    KrakenFailureCallback failureCallback);
-
-    // https://dev.twitch.tv/docs/v5/reference/users#get-user-by-id
-    void getUser(QString userId, ResultCallback<KrakenUser> resultCallback,
-                 KrakenFailureCallback failureCallback);
-
     void update(QString clientId, QString oauthToken);
 
     static void initialize();

@@ -1,6 +1,7 @@
 #include "singletons/NativeMessaging.hpp"
 
 #include "Application.hpp"
+#include "common/QLogging.hpp"
 #include "providers/twitch/TwitchIrcServer.hpp"
 #include "singletons/Paths.hpp"
 #include "util/PostToThread.hpp"
@@ -125,7 +126,7 @@ void NativeMessagingClient::sendMessage(const QByteArray &array)
     }
     catch (ipc::interprocess_exception &ex)
     {
-        qDebug() << "send to gui process:" << ex.what();
+        qCDebug(chatterinoNativeMessage) << "send to gui process:" << ex.what();
     }
 }
 
@@ -169,7 +170,8 @@ void NativeMessagingServer::ReceiverThread::run()
         }
         catch (ipc::interprocess_exception &ex)
         {
-            qDebug() << "received from gui process:" << ex.what();
+            qCDebug(chatterinoNativeMessage)
+                << "received from gui process:" << ex.what();
         }
     }
 }
@@ -183,7 +185,7 @@ void NativeMessagingServer::ReceiverThread::handleMessage(
 
     if (action.isNull())
     {
-        qDebug() << "NM action was null";
+        qCDebug(chatterinoNativeMessage) << "NM action was null";
         return;
     }
 
@@ -198,15 +200,18 @@ void NativeMessagingServer::ReceiverThread::handleMessage(
         AttachedWindow::GetArgs args;
         args.winId = root.value("winId").toString();
         args.yOffset = root.value("yOffset").toInt(-1);
+        args.x = root.value("size").toObject().value("x").toInt(-1);
         args.width = root.value("size").toObject().value("width").toInt(-1);
         args.height = root.value("size").toObject().value("height").toInt(-1);
         args.fullscreen = attachFullscreen;
 
-        qDebug() << args.width << args.height << args.winId;
+        qCDebug(chatterinoNativeMessage)
+            << args.x << args.width << args.height << args.winId;
 
         if (_type.isNull() || args.winId.isNull())
         {
-            qDebug() << "NM type, name or winId missing";
+            qCDebug(chatterinoNativeMessage)
+                << "NM type, name or winId missing";
             attach = false;
             attachFullscreen = false;
             return;
@@ -241,7 +246,7 @@ void NativeMessagingServer::ReceiverThread::handleMessage(
         }
         else
         {
-            qDebug() << "NM unknown channel type";
+            qCDebug(chatterinoNativeMessage) << "NM unknown channel type";
         }
     }
     else if (action == "detach")
@@ -250,20 +255,20 @@ void NativeMessagingServer::ReceiverThread::handleMessage(
 
         if (winId.isNull())
         {
-            qDebug() << "NM winId missing";
+            qCDebug(chatterinoNativeMessage) << "NM winId missing";
             return;
         }
 
 #ifdef USEWINSDK
         postToThread([winId] {
-            qDebug() << "NW detach";
+            qCDebug(chatterinoNativeMessage) << "NW detach";
             AttachedWindow::detach(winId);
         });
 #endif
     }
     else
     {
-        qDebug() << "NM unknown action " + action;
+        qCDebug(chatterinoNativeMessage) << "NM unknown action " + action;
     }
 }
 

@@ -1,6 +1,6 @@
 # Linux
 
-Note on Qt version compatibility: If you are installing Qt from a package manager, please ensure the version you are installing is at least **Qt 5.10 or newer**.
+Note on Qt version compatibility: If you are installing Qt from a package manager, please ensure the version you are installing is at least **Qt 5.12 or newer**.
 
 ## Ubuntu 18.04
 *most likely works the same for other Debian-like distros*
@@ -9,7 +9,7 @@ Note on Qt version compatibility: If you are installing Qt from a package manage
 
 ## Arch Linux
 install [chatterino2-git](https://aur.archlinux.org/packages/chatterino2-git/) from the aur or build manually as follows:
-1. `sudo pacman -S qt5-base qt5-multimedia qt5-svg gst-plugins-ugly gst-plugins-good boost rapidjson`
+1. `sudo pacman -S qt5-base qt5-multimedia qt5-svg gst-plugins-ugly gst-plugins-good boost rapidjson pkgconf openssl`
 1. go into project directory
 1. create build folder `mkdir build && cd build`
 1. `qmake .. && make`
@@ -26,7 +26,7 @@ install [chatterino2-git](https://aur.archlinux.org/packages/chatterino2-git/) f
 1. `sudo dnf install gstreamer-plugins-good` *(optional: for audio output)*
 
 ## NixOS 18.09+
-1. enter the development environment with all of the dependencies: `nix-shell -p openssl boost qt5.full`
+1. enter the development environment with all of the dependencies: `nix-shell -p openssl boost qt5.full pkg-config`
 1. go into project directory
 1. create build folder `mkdir build && cd build`
 1. `qmake .. && make`

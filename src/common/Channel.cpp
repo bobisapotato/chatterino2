@@ -49,6 +49,11 @@ const QString &Channel::getDisplayName() const
     return this->getName();
 }
 
+const QString &Channel::getLocalizedName() const
+{
+    return this->getName();
+}
+
 bool Channel::isTwitchChannel() const
 {
     return this->type_ >= Type::Twitch && this->type_ < Type::TwitchEnd;
@@ -57,6 +62,11 @@ bool Channel::isTwitchChannel() const
 bool Channel::isEmpty() const
 {
     return this->name_.isEmpty();
+}
+
+bool Channel::hasMessages() const
+{
+    return !this->messages_.empty();
 }
 
 LimitedQueueSnapshot<MessagePtr> Channel::getMessageSnapshot()
@@ -125,17 +135,17 @@ void Channel::addOrReplaceTimeout(MessagePtr message)
         }
 
         if (s->flags.has(MessageFlag::Timeout) &&
-            s->timeoutUser == message->timeoutUser)  //
+            s->timeoutUser == message->timeoutUser)
         {
             if (message->flags.has(MessageFlag::PubSub) &&
-                !s->flags.has(MessageFlag::PubSub))  //
+                !s->flags.has(MessageFlag::PubSub))
             {
                 this->replaceMessage(s, message);
                 addMessage = false;
                 break;
             }
             if (!message->flags.has(MessageFlag::PubSub) &&
-                s->flags.has(MessageFlag::PubSub))  //
+                s->flags.has(MessageFlag::PubSub))
             {
                 addMessage = timeoutStackStyle == TimeoutStackStyle::DontStack;
                 break;
@@ -143,9 +153,8 @@ void Channel::addOrReplaceTimeout(MessagePtr message)
 
             int count = s->count + 1;
 
-            MessageBuilder replacement(systemMessage,
-                                       message->searchText + QString(" (") +
-                                           QString::number(count) + " times)");
+            MessageBuilder replacement(timeoutMessage, message->searchText,
+                                       count);
 
             replacement->timeoutUser = message->timeoutUser;
             replacement->count = count;
@@ -217,6 +226,14 @@ void Channel::replaceMessage(MessagePtr message, MessagePtr replacement)
     if (index >= 0)
     {
         this->messageReplaced.invoke((size_t)index, replacement);
+    }
+}
+
+void Channel::replaceMessage(size_t index, MessagePtr replacement)
+{
+    if (this->messages_.replaceItem(index, replacement))
+    {
+        this->messageReplaced.invoke(index, replacement);
     }
 }
 

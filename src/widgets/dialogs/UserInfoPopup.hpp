@@ -1,6 +1,7 @@
 #pragma once
 
 #include "widgets/BaseWindow.hpp"
+#include "widgets/helper/ChannelView.hpp"
 
 #include <pajlada/signals/signal.hpp>
 
@@ -17,7 +18,8 @@ class UserInfoPopup final : public BaseWindow
     Q_OBJECT
 
 public:
-    UserInfoPopup();
+    UserInfoPopup(bool closeAutomatically, QWidget *parent);
+    ~UserInfoPopup();
 
     void setData(const QString &name, const ChannelPtr &channel);
 
@@ -28,6 +30,7 @@ protected:
 private:
     void installEvents();
     void updateUserData();
+    void updateLatestMessages();
 
     void loadAvatar(const QUrl &url);
     bool isMod_;
@@ -39,6 +42,9 @@ private:
 
     pajlada::Signals::NoArgSignal userStateChanged_;
 
+    // replace with ScopedConnection once https://github.com/pajlada/signals/pull/10 gets merged
+    pajlada::Signals::Connection refreshConnection_;
+
     std::shared_ptr<bool> hack_;
 
     struct {
@@ -49,10 +55,16 @@ private:
         Label *followerCountLabel = nullptr;
         Label *createdDateLabel = nullptr;
         Label *userIDLabel = nullptr;
+        Label *followageLabel = nullptr;
+        Label *subageLabel = nullptr;
 
         QCheckBox *follow = nullptr;
         QCheckBox *ignore = nullptr;
         QCheckBox *ignoreHighlights = nullptr;
+
+        Label *noMessagesLabel = nullptr;
+        ChannelView *latestMessages = nullptr;
+        QPushButton *refreshButton = nullptr;
     } ui_;
 
     class TimeoutWidget : public BaseWidget

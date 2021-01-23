@@ -1,6 +1,8 @@
 #pragma once
 
-#include <QStringList>
+#include <QApplication>
+#include <boost/optional.hpp>
+#include "common/WindowDescriptors.hpp"
 
 namespace chatterino {
 
@@ -8,13 +10,19 @@ namespace chatterino {
 class Args
 {
 public:
-    Args(const QStringList &args);
+    Args(const QApplication &app);
 
     bool printVersion{};
     bool crashRecovery{};
+    bool shouldRunBrowserExtensionHost{};
+    bool dontSaveSettings{};
+    boost::optional<WindowLayout> customChannelLayout;
+
+private:
+    void applyCustomChannelLayout(const QString &argValue);
 };
 
-void initArgs(const QStringList &args);
+void initArgs(const QApplication &app);
 const Args &getArgs();
 
 }  // namespace chatterino

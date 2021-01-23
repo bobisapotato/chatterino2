@@ -8,6 +8,18 @@
 # from lib/boost.pri
 #  - BOOST_DIRECTORY (C:\local\boost\ by default) (Windows only)
 
+CCACHE_BIN = $$system(which ccache)
+!isEmpty(CCACHE_BIN) {
+  load(ccache)
+  CONFIG+=ccache
+}
+
+MINIMUM_REQUIRED_QT_VERSION = 5.12.0
+
+!versionAtLeast(QT_VERSION, $$MINIMUM_REQUIRED_QT_VERSION) {
+    error("You're trying to compile with Qt $$QT_VERSION, but minimum required Qt version is $$MINIMUM_REQUIRED_QT_VERSION")
+}
+
 QT                += widgets core gui network multimedia svg concurrent
 CONFIG            += communi
 COMMUNI           += core model util
@@ -47,6 +59,8 @@ linux {
 }
 
 macx {
+    QMAKE_MACOSX_DEPLOYMENT_TARGET = 10.14
+
     INCLUDEPATH += /usr/local/include
     INCLUDEPATH += /usr/local/opt/openssl/include
     LIBS += -L/usr/local/opt/openssl/lib
@@ -69,6 +83,8 @@ macx {
 CONFIG(debug, debug|release) {
     DEFINES += C_DEBUG
     DEFINES += QT_DEBUG
+} else {
+    DEFINES += NDEBUG
 }
 
 # Submodules
@@ -124,12 +140,18 @@ SOURCES += \
     src/common/NetworkResult.cpp \
     src/common/UsernameSet.cpp \
     src/common/Version.cpp \
+    src/common/WindowDescriptors.cpp \
+    src/common/QLogging.cpp \
     src/controllers/accounts/Account.cpp \
     src/controllers/accounts/AccountController.cpp \
     src/controllers/accounts/AccountModel.cpp \
     src/controllers/commands/Command.cpp \
     src/controllers/commands/CommandController.cpp \
     src/controllers/commands/CommandModel.cpp \
+    src/controllers/filters/FilterModel.cpp \
+    src/controllers/filters/parser/FilterParser.cpp \
+    src/controllers/filters/parser/Tokenizer.cpp \
+    src/controllers/filters/parser/Types.cpp \
     src/controllers/highlights/HighlightBlacklistModel.cpp \
     src/controllers/highlights/HighlightModel.cpp \
     src/controllers/highlights/HighlightPhrase.cpp \
@@ -159,11 +181,13 @@ SOURCES += \
     src/messages/search/AuthorPredicate.cpp \
     src/messages/search/LinkPredicate.cpp \
     src/messages/search/SubstringPredicate.cpp \
+    src/messages/SharedMessageBuilder.cpp \
     src/providers/bttv/BttvEmotes.cpp \
     src/providers/bttv/LoadBttvChannelEmote.cpp \
     src/providers/chatterino/ChatterinoBadges.cpp \
     src/providers/colors/ColorProvider.cpp \
     src/providers/emoji/Emojis.cpp \
+    src/providers/ffz/FfzBadges.cpp \
     src/providers/ffz/FfzEmotes.cpp \
     src/providers/irc/AbstractIrcServer.cpp \
     src/providers/irc/Irc2.cpp \
@@ -171,8 +195,11 @@ SOURCES += \
     src/providers/irc/IrcChannel2.cpp \
     src/providers/irc/IrcCommands.cpp \
     src/providers/irc/IrcConnection2.cpp \
+    src/providers/irc/IrcMessageBuilder.cpp \
     src/providers/irc/IrcServer.cpp \
+    src/providers/IvrApi.cpp \
     src/providers/LinkResolver.cpp \
+    src/providers/twitch/ChannelPointReward.cpp \
     src/providers/twitch/api/Helix.cpp \
     src/providers/twitch/api/Kraken.cpp \
     src/providers/twitch/IrcMessageHandler.cpp \
@@ -215,10 +242,12 @@ SOURCES += \
     src/util/IncognitoBrowser.cpp \
     src/util/InitUpdateButton.cpp \
     src/util/JsonQuery.cpp \
+    src/util/LayoutHelper.cpp \
+    src/util/NuulsUploader.cpp \
     src/util/RapidjsonHelpers.cpp \
+    src/util/StreamerMode.cpp \
     src/util/StreamLink.cpp \
     src/util/Twitch.cpp \
-    src/util/NuulsUploader.cpp \
     src/util/WindowsHelper.cpp \
     src/widgets/AccountSwitchPopup.cpp \
     src/widgets/AccountSwitchWidget.cpp \
@@ -226,6 +255,7 @@ SOURCES += \
     src/widgets/BasePopup.cpp \
     src/widgets/BaseWidget.cpp \
     src/widgets/BaseWindow.cpp \
+    src/widgets/dialogs/ChannelFilterEditorDialog.cpp \
     src/widgets/dialogs/ColorPickerDialog.cpp \
     src/widgets/dialogs/EmotePopup.cpp \
     src/widgets/dialogs/IrcConnectionEditor.cpp \
@@ -234,7 +264,12 @@ SOURCES += \
     src/widgets/dialogs/NotificationPopup.cpp \
     src/widgets/dialogs/QualityPopup.cpp \
     src/widgets/dialogs/SelectChannelDialog.cpp \
+    src/widgets/dialogs/SelectChannelFiltersDialog.cpp \
     src/widgets/dialogs/SettingsDialog.cpp \
+    src/widgets/listview/GenericItemDelegate.cpp \
+    src/widgets/dialogs/switcher/NewTabItem.cpp \
+    src/widgets/dialogs/switcher/QuickSwitcherPopup.cpp \
+    src/widgets/dialogs/switcher/SwitchSplitItem.cpp \
     src/widgets/dialogs/TextInputDialog.cpp \
     src/widgets/dialogs/UpdateDialog.cpp \
     src/widgets/dialogs/UserInfoPopup.cpp \
@@ -258,11 +293,16 @@ SOURCES += \
     src/widgets/Label.cpp \
     src/widgets/Notebook.cpp \
     src/widgets/Scrollbar.cpp \
+    src/widgets/listview/GenericListItem.cpp \
+    src/widgets/listview/GenericListModel.cpp \
+    src/widgets/listview/GenericListView.cpp \
     src/widgets/settingspages/AboutPage.cpp \
     src/widgets/settingspages/AccountsPage.cpp \
     src/widgets/settingspages/CommandPage.cpp \
     src/widgets/settingspages/ExternalToolsPage.cpp \
+    src/widgets/settingspages/FiltersPage.cpp \
     src/widgets/settingspages/GeneralPage.cpp \
+    src/widgets/settingspages/GeneralPageView.cpp \
     src/widgets/settingspages/HighlightingPage.cpp \
     src/widgets/settingspages/IgnoresPage.cpp \
     src/widgets/settingspages/KeyboardSettingsPage.cpp \
@@ -270,6 +310,8 @@ SOURCES += \
     src/widgets/settingspages/NotificationPage.cpp \
     src/widgets/settingspages/SettingsPage.cpp \
     src/widgets/splits/ClosedSplits.cpp \
+    src/widgets/splits/EmoteInputItem.cpp \
+    src/widgets/splits/EmoteInputPopup.cpp \
     src/widgets/splits/Split.cpp \
     src/widgets/splits/SplitContainer.cpp \
     src/widgets/splits/SplitHeader.cpp \
@@ -298,6 +340,7 @@ HEADERS += \
     src/common/DownloadManager.hpp \
     src/common/Env.hpp \
     src/common/FlagsEnum.hpp \
+    src/common/IrcColors.hpp \
     src/common/LinkParser.hpp \
     src/common/Modes.hpp \
     src/common/NetworkCommon.hpp \
@@ -314,12 +357,19 @@ HEADERS += \
     src/common/UniqueAccess.hpp \
     src/common/UsernameSet.hpp \
     src/common/Version.hpp \
+    src/common/QLogging.hpp \
     src/controllers/accounts/Account.hpp \
     src/controllers/accounts/AccountController.hpp \
     src/controllers/accounts/AccountModel.hpp \
     src/controllers/commands/Command.hpp \
     src/controllers/commands/CommandController.hpp \
     src/controllers/commands/CommandModel.hpp \
+    src/controllers/filters/FilterModel.hpp \
+    src/controllers/filters/FilterRecord.hpp \
+    src/controllers/filters/FilterSet.hpp \
+    src/controllers/filters/parser/FilterParser.hpp \
+    src/controllers/filters/parser/Tokenizer.hpp \
+    src/controllers/filters/parser/Types.hpp \
     src/controllers/highlights/HighlightBlacklistModel.hpp \
     src/controllers/highlights/HighlightBlacklistUser.hpp \
     src/controllers/highlights/HighlightModel.hpp \
@@ -358,12 +408,14 @@ HEADERS += \
     src/messages/search/MessagePredicate.hpp \
     src/messages/search/SubstringPredicate.hpp \
     src/messages/Selection.hpp \
+    src/messages/SharedMessageBuilder.hpp \
     src/PrecompiledHeader.hpp \
     src/providers/bttv/BttvEmotes.hpp \
     src/providers/bttv/LoadBttvChannelEmote.hpp \
     src/providers/chatterino/ChatterinoBadges.hpp \
     src/providers/colors/ColorProvider.hpp \
     src/providers/emoji/Emojis.hpp \
+    src/providers/ffz/FfzBadges.hpp \
     src/providers/ffz/FfzEmotes.hpp \
     src/providers/irc/AbstractIrcServer.hpp \
     src/providers/irc/Irc2.hpp \
@@ -371,8 +423,12 @@ HEADERS += \
     src/providers/irc/IrcChannel2.hpp \
     src/providers/irc/IrcCommands.hpp \
     src/providers/irc/IrcConnection2.hpp \
+    src/providers/irc/IrcMessageBuilder.hpp \
     src/providers/irc/IrcServer.hpp \
+    src/providers/IvrApi.hpp \
     src/providers/LinkResolver.hpp \
+    src/providers/twitch/ChannelPointReward.hpp \
+    src/providers/twitch/ChatterinoWebSocketppLogger.hpp \
     src/providers/twitch/api/Helix.hpp \
     src/providers/twitch/api/Kraken.hpp \
     src/providers/twitch/EmoteValue.hpp \
@@ -425,12 +481,12 @@ HEADERS += \
     src/util/JsonQuery.hpp \
     src/util/LayoutCreator.hpp \
     src/util/LayoutHelper.hpp \
+    src/util/NuulsUploader.hpp \
     src/util/Overloaded.hpp \
     src/util/PersistSignalVector.hpp \
     src/util/PostToThread.hpp \
     src/util/QObjectRef.hpp \
     src/util/QStringHash.hpp \
-    src/util/Twitch.hpp \
     src/util/rangealgorithm.hpp \
     src/util/RapidjsonHelpers.hpp \
     src/util/RapidJsonSerializeQString.hpp \
@@ -440,8 +496,9 @@ HEADERS += \
     src/util/SharedPtrElementLess.hpp \
     src/util/Shortcut.hpp \
     src/util/StandardItemHelper.hpp \
+    src/util/StreamerMode.hpp \
     src/util/StreamLink.hpp \
-    src/util/NuulsUploader.hpp \
+    src/util/Twitch.hpp \
     src/util/WindowsHelper.hpp \
     src/widgets/AccountSwitchPopup.hpp \
     src/widgets/AccountSwitchWidget.hpp \
@@ -449,6 +506,7 @@ HEADERS += \
     src/widgets/BasePopup.hpp \
     src/widgets/BaseWidget.hpp \
     src/widgets/BaseWindow.hpp \
+    src/widgets/dialogs/ChannelFilterEditorDialog.hpp \
     src/widgets/dialogs/ColorPickerDialog.hpp \
     src/widgets/dialogs/EmotePopup.hpp \
     src/widgets/dialogs/IrcConnectionEditor.hpp \
@@ -457,7 +515,14 @@ HEADERS += \
     src/widgets/dialogs/NotificationPopup.hpp \
     src/widgets/dialogs/QualityPopup.hpp \
     src/widgets/dialogs/SelectChannelDialog.hpp \
+    src/widgets/dialogs/SelectChannelFiltersDialog.hpp \
     src/widgets/dialogs/SettingsDialog.hpp \
+    src/widgets/dialogs/switcher/AbstractSwitcherItem.hpp \
+    src/widgets/listview/GenericItemDelegate.hpp \
+    src/widgets/dialogs/switcher/NewTabItem.hpp \
+    src/widgets/dialogs/switcher/QuickSwitcherModel.hpp \
+    src/widgets/dialogs/switcher/QuickSwitcherPopup.hpp \
+    src/widgets/dialogs/switcher/SwitchSplitItem.hpp \
     src/widgets/dialogs/TextInputDialog.hpp \
     src/widgets/dialogs/UpdateDialog.hpp \
     src/widgets/dialogs/UserInfoPopup.hpp \
@@ -483,11 +548,16 @@ HEADERS += \
     src/widgets/Label.hpp \
     src/widgets/Notebook.hpp \
     src/widgets/Scrollbar.hpp \
+    src/widgets/listview/GenericListItem.hpp \
+    src/widgets/listview/GenericListModel.hpp \
+    src/widgets/listview/GenericListView.hpp \
     src/widgets/settingspages/AboutPage.hpp \
     src/widgets/settingspages/AccountsPage.hpp \
     src/widgets/settingspages/CommandPage.hpp \
     src/widgets/settingspages/ExternalToolsPage.hpp \
+    src/widgets/settingspages/FiltersPage.hpp \
     src/widgets/settingspages/GeneralPage.hpp \
+    src/widgets/settingspages/GeneralPageView.hpp \
     src/widgets/settingspages/HighlightingPage.hpp \
     src/widgets/settingspages/IgnoresPage.hpp \
     src/widgets/settingspages/KeyboardSettingsPage.hpp \
@@ -495,6 +565,8 @@ HEADERS += \
     src/widgets/settingspages/NotificationPage.hpp \
     src/widgets/settingspages/SettingsPage.hpp \
     src/widgets/splits/ClosedSplits.hpp \
+    src/widgets/splits/EmoteInputItem.hpp \
+    src/widgets/splits/EmoteInputPopup.hpp \
     src/widgets/splits/Split.hpp \
     src/widgets/splits/SplitContainer.hpp \
     src/widgets/splits/SplitHeader.hpp \
@@ -559,6 +631,7 @@ CONFIG(debug, debug|release) {
     message("Building Chatterino2 DEBUG")
 } else {
     message("Building Chatterino2 RELEASE")
+    DEFINES += DEBUG_OFF
 }
 
 message("Injected git values: $$git_commit ($$git_release) $$git_hash")

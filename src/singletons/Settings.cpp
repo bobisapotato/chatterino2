@@ -21,6 +21,7 @@ ConcurrentSettings::ConcurrentSettings()
     , blacklistedUsers(*new SignalVector<HighlightBlacklistUser>())
     , ignoredMessages(*new SignalVector<IgnorePhrase>())
     , mutedChannels(*new SignalVector<QString>())
+    , filterRecords(*new SignalVector<FilterRecordPtr>())
     , moderationActions(*new SignalVector<ModerationAction>)
 {
     persist(this->highlightedMessages, "/highlighting/highlights");
@@ -28,13 +29,16 @@ ConcurrentSettings::ConcurrentSettings()
     persist(this->highlightedUsers, "/highlighting/users");
     persist(this->ignoredMessages, "/ignore/phrases");
     persist(this->mutedChannels, "/pings/muted");
+    persist(this->filterRecords, "/filtering/filters");
     // tagged users?
     persist(this->moderationActions, "/moderation/actions");
 }
 
 bool ConcurrentSettings::isHighlightedUser(const QString &username)
 {
-    for (const auto &highlightedUser : this->highlightedUsers)
+    auto items = this->highlightedUsers.readOnly();
+
+    for (const auto &highlightedUser : *items)
     {
         if (highlightedUser.isMatch(username))
             return true;
@@ -58,7 +62,9 @@ bool ConcurrentSettings::isBlacklistedUser(const QString &username)
 
 bool ConcurrentSettings::isMutedChannel(const QString &channelName)
 {
-    for (const auto &channel : this->mutedChannels)
+    auto items = this->mutedChannels.readOnly();
+
+    for (const auto &channel : *items)
     {
         if (channelName.toLower() == channel.toLower())
         {
@@ -119,7 +125,10 @@ Settings::Settings(const QString &settingsDirectory)
 #ifdef USEWINSDK
     this->autorun = isRegisteredForStartup();
     this->autorun.connect(
-        [](bool autorun) { setRegisteredForStartup(autorun); }, false);
+        [](bool autorun) {
+            setRegisteredForStartup(autorun);
+        },
+        false);
 #endif
 }
 

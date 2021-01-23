@@ -187,6 +187,18 @@ void SplitContainer::insertSplit(Split *split, Direction direction,
     this->addSplit(split);
 }
 
+Split *SplitContainer::getSelectedSplit() const
+{
+    // safety check
+    if (std::find(this->splits_.begin(), this->splits_.end(),
+                  this->selected_) == this->splits_.end())
+    {
+        return nullptr;
+    }
+
+    return this->selected_;
+}
+
 void SplitContainer::addSplit(Split *split)
 {
     assertInGuiThread();
@@ -199,29 +211,39 @@ void SplitContainer::addSplit(Split *split)
 
     this->refreshTab();
 
-    split->getChannelView().tabHighlightRequested.connect(
-        [this](HighlightState state) {
-            if (this->tab_ != nullptr)
-            {
-                this->tab_->setHighlightState(state);
-            }
-        });
+    this->managedConnect(split->getChannelView().tabHighlightRequested,
+                         [this](HighlightState state) {
+                             if (this->tab_ != nullptr)
+                             {
+                                 this->tab_->setHighlightState(state);
+                             }
+                         });
 
-    split->getChannelView().liveStatusChanged.connect([this]() {
-        this->refreshTabLiveStatus();  //
+    this->managedConnect(split->getChannelView().liveStatusChanged, [this]() {
+        this->refreshTabLiveStatus();
     });
 
-    split->focused.connect([this, split] { this->setSelected(split); });
+    this->managedConnect(split->focused, [this, split] {
+        this->setSelected(split);
+    });
 
     this->layout();
 }
 
 void SplitContainer::setSelected(Split *split)
 {
+    // safety
+    if (std::find(this->splits_.begin(), this->splits_.end(), split) ==
+        this->splits_.end())
+    {
+        return;
+    }
+
     this->selected_ = split;
 
     if (Node *node = this->baseNode_.findNodeContainingSplit(split))
     {
+        this->focusSplitRecursive(node);
         this->setPreferedTargetRecursive(node);
     }
 }
@@ -298,9 +320,10 @@ void SplitContainer::selectSplitRecursive(Node *node, Direction direction)
         {
             auto &siblings = node->parent_->children_;
 
-            auto it = std::find_if(
-                siblings.begin(), siblings.end(),
-                [node](const auto &other) { return other.get() == node; });
+            auto it = std::find_if(siblings.begin(), siblings.end(),
+                                   [node](const auto &other) {
+                                       return other.get() == node;
+                                   });
             assert(it != siblings.end());
 
             if (direction == Direction::Left || direction == Direction::Above)
@@ -312,7 +335,7 @@ void SplitContainer::selectSplitRecursive(Node *node, Direction direction)
                 else
                 {
                     this->focusSplitRecursive(
-                        siblings[it - siblings.begin() - 1].get(), direction);
+                        siblings[it - siblings.begin() - 1].get());
                 }
             }
             else
@@ -324,7 +347,7 @@ void SplitContainer::selectSplitRecursive(Node *node, Direction direction)
                 else
                 {
                     this->focusSplitRecursive(
-                        siblings[it - siblings.begin() + 1].get(), direction);
+                        siblings[it - siblings.begin() + 1].get());
                 }
             }
         }
@@ -335,7 +358,7 @@ void SplitContainer::selectSplitRecursive(Node *node, Direction direction)
     }
 }
 
-void SplitContainer::focusSplitRecursive(Node *node, Direction direction)
+void SplitContainer::focusSplitRecursive(Node *node)
 {
     switch (node->type_)
     {
@@ -355,12 +378,11 @@ void SplitContainer::focusSplitRecursive(Node *node, Direction direction)
 
             if (it != children.end())
             {
-                this->focusSplitRecursive(it->get(), direction);
+                this->focusSplitRecursive(it->get());
             }
             else
             {
-                this->focusSplitRecursive(node->children_.front().get(),
-                                          direction);
+                this->focusSplitRecursive(node->children_.front().get());
             }
         }
         break;
@@ -676,55 +698,69 @@ SplitContainer::Node *SplitContainer::getBaseNode()
     return &this->baseNode_;
 }
 
-void SplitContainer::decodeFromJson(QJsonObject &obj)
+void SplitContainer::applyFromDescriptor(const NodeDescriptor &rootNode)
 {
     assert(this->baseNode_.type_ == Node::EmptyRoot);
 
-    this->decodeNodeRecusively(obj, &this->baseNode_);
+    this->applyFromDescriptorRecursively(rootNode, &this->baseNode_);
 }
 
-void SplitContainer::decodeNodeRecusively(QJsonObject &obj, Node *node)
+void SplitContainer::applyFromDescriptorRecursively(
+    const NodeDescriptor &rootNode, Node *node)
 {
-    QString type = obj.value("type").toString();
-
-    if (type == "split")
+    if (std::holds_alternative<SplitNodeDescriptor>(rootNode))
     {
+        auto *n = std::get_if<SplitNodeDescriptor>(&rootNode);
+        if (!n)
+        {
+            return;
+        }
+        const auto &splitNode = *n;
         auto *split = new Split(this);
-        split->setChannel(
-            WindowManager::decodeChannel(obj.value("data").toObject()));
-        split->setModerationMode(obj.value("moderationMode").toBool(false));
+        split->setChannel(WindowManager::decodeChannel(splitNode));
+        split->setModerationMode(splitNode.moderationMode_);
+        split->setFilters(splitNode.filters_);
 
         this->appendSplit(split);
     }
-    else if (type == "horizontal" || type == "vertical")
+    else if (std::holds_alternative<ContainerNodeDescriptor>(rootNode))
     {
-        bool vertical = type == "vertical";
+        auto *n = std::get_if<ContainerNodeDescriptor>(&rootNode);
+        if (!n)
+        {
+            return;
+        }
+        const auto &containerNode = *n;
+
+        bool vertical = containerNode.vertical_;
 
         Direction direction = vertical ? Direction::Below : Direction::Right;
 
         node->type_ =
             vertical ? Node::VerticalContainer : Node::HorizontalContainer;
 
-        for (QJsonValue _val : obj.value("items").toArray())
+        for (const auto &item : containerNode.items_)
         {
-            auto _obj = _val.toObject();
-
-            auto _type = _obj.value("type");
-            if (_type == "split")
+            if (std::holds_alternative<SplitNodeDescriptor>(item))
             {
+                auto *n = std::get_if<SplitNodeDescriptor>(&item);
+                if (!n)
+                {
+                    return;
+                }
+                const auto &splitNode = *n;
                 auto *split = new Split(this);
-                split->setChannel(WindowManager::decodeChannel(
-                    _obj.value("data").toObject()));
-                split->setModerationMode(
-                    _obj.value("moderationMode").toBool(false));
+                split->setChannel(WindowManager::decodeChannel(splitNode));
+                split->setModerationMode(splitNode.moderationMode_);
+                split->setFilters(splitNode.filters_);
 
                 Node *_node = new Node();
                 _node->parent_ = node;
                 _node->split_ = split;
                 _node->type_ = Node::_Split;
 
-                _node->flexH_ = _obj.value("flexh").toDouble(1.0);
-                _node->flexV_ = _obj.value("flexv").toDouble(1.0);
+                _node->flexH_ = splitNode.flexH_;
+                _node->flexV_ = splitNode.flexV_;
                 node->children_.emplace_back(_node);
 
                 this->addSplit(split);
@@ -734,19 +770,7 @@ void SplitContainer::decodeNodeRecusively(QJsonObject &obj, Node *node)
                 Node *_node = new Node();
                 _node->parent_ = node;
                 node->children_.emplace_back(_node);
-                this->decodeNodeRecusively(_obj, _node);
-            }
-        }
-
-        for (int i = 0; i < 2; i++)
-        {
-            if (node->getChildren().size() < 2)
-            {
-                auto *split = new Split(this);
-                split->setChannel(
-                    WindowManager::decodeChannel(obj.value("data").toObject()));
-
-                this->insertSplit(split, direction, node);
+                this->applyFromDescriptorRecursively(item, _node);
             }
         }
     }
@@ -764,7 +788,7 @@ void SplitContainer::refreshTabTitle()
 
     for (const auto &chatWidget : this->splits_)
     {
-        auto channelName = chatWidget->getChannel()->getName();
+        auto channelName = chatWidget->getChannel()->getLocalizedName();
         if (channelName.isEmpty())
         {
             continue;
@@ -972,8 +996,10 @@ void SplitContainer::Node::insertNextToThis(Split *_split, Direction _direction)
         this->geometry_ = QRect(0, 0, int(width), int(height));
     }
 
-    auto it = std::find_if(siblings.begin(), siblings.end(),
-                           [this](auto &node) { return this == node.get(); });
+    auto it =
+        std::find_if(siblings.begin(), siblings.end(), [this](auto &node) {
+            return this == node.get();
+        });
 
     assert(it != siblings.end());
     if (_direction == Direction::Right || _direction == Direction::Below)
@@ -1014,8 +1040,9 @@ SplitContainer::Position SplitContainer::Node::releaseSplit()
         auto &siblings = this->parent_->children_;
 
         auto it =
-            std::find_if(begin(siblings), end(siblings),
-                         [this](auto &node) { return this == node.get(); });
+            std::find_if(begin(siblings), end(siblings), [this](auto &node) {
+                return this == node.get();
+            });
         assert(it != siblings.end());
 
         Position position;

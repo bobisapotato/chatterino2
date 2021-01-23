@@ -31,10 +31,11 @@ enum class SettingsDialogPreference {
 
 class SettingsDialog : public BaseWindow
 {
-public:
-    SettingsDialog();
+    SettingsDialog(QWidget *parent);
 
-    static void showDialog(SettingsDialogPreference preferredTab =
+public:
+    static void showDialog(QWidget *parent,
+                           SettingsDialogPreference preferredTab =
                                SettingsDialogPreference::NoPreference);
 
 protected:

@@ -3,6 +3,7 @@
 #include "BaseSettings.hpp"
 #include "BaseTheme.hpp"
 #include "boost/algorithm/algorithm.hpp"
+#include "util/DebugCount.hpp"
 #include "util/PostToThread.hpp"
 #include "util/Shortcut.hpp"
 #include "util/WindowsHelper.hpp"
@@ -44,9 +45,9 @@
 namespace chatterino {
 
 BaseWindow::BaseWindow(FlagsEnum<Flags> _flags, QWidget *parent)
-    : BaseWidget(parent,
-                 Qt::Window | (_flags.has(TopMost) ? Qt::WindowStaysOnTopHint
-                                                   : Qt::WindowFlags()))
+    : BaseWidget(parent, (_flags.has(Dialog) ? Qt::Dialog : Qt::Window) |
+                             (_flags.has(TopMost) ? Qt::WindowStaysOnTopHint
+                                                  : Qt::WindowFlags()))
     , enableCustomFrame_(_flags.has(EnableCustomFrame))
     , frameless_(_flags.has(Frameless))
     , flags_(_flags)
@@ -55,6 +56,18 @@ BaseWindow::BaseWindow(FlagsEnum<Flags> _flags, QWidget *parent)
     {
         this->enableCustomFrame_ = false;
         this->setWindowFlag(Qt::FramelessWindowHint);
+    }
+
+    if (_flags.has(DontFocus))
+    {
+        this->setAttribute(Qt::WA_ShowWithoutActivating);
+#ifdef Q_OS_LINUX
+        this->setWindowFlags(Qt::ToolTip);
+#else
+        this->setWindowFlags(Qt::Tool | Qt::FramelessWindowHint |
+                             Qt::X11BypassWindowManagerHint |
+                             Qt::BypassWindowManagerHint);
+#endif
     }
 
     this->init();
@@ -70,18 +83,26 @@ BaseWindow::BaseWindow(FlagsEnum<Flags> _flags, QWidget *parent)
 
     this->updateScale();
 
-    createWindowShortcut(this, "CTRL+0",
-                         [] { getSettings()->uiScale.setValue(1); });
+    createWindowShortcut(this, "CTRL+0", [] {
+        getSettings()->uiScale.setValue(1);
+    });
 
     this->resize(300, 150);
 
 #ifdef USEWINSDK
     this->useNextBounds_.setSingleShot(true);
-    QObject::connect(&this->useNextBounds_, &QTimer::timeout, this,
-                     [this]() { this->currentBounds_ = this->nextBounds_; });
+    QObject::connect(&this->useNextBounds_, &QTimer::timeout, this, [this]() {
+        this->currentBounds_ = this->nextBounds_;
+    });
 #endif
 
     this->themeChangedEvent();
+    DebugCount::increase("BaseWindow");
+}
+
+BaseWindow::~BaseWindow()
+{
+    DebugCount::decrease("BaseWindow");
 }
 
 void BaseWindow::setInitialBounds(const QRect &bounds)
@@ -135,9 +156,10 @@ void BaseWindow::init()
 
                 // title
                 Label *title = new Label;
-                QObject::connect(
-                    this, &QWidget::windowTitleChanged,
-                    [title](const QString &text) { title->setText(text); });
+                QObject::connect(this, &QWidget::windowTitleChanged,
+                                 [title](const QString &text) {
+                                     title->setText(text);
+                                 });
 
                 QSizePolicy policy(QSizePolicy::Ignored,
                                    QSizePolicy::Preferred);
@@ -168,7 +190,9 @@ void BaseWindow::init()
                                              : Qt::WindowMaximized);
                                  });
                 QObject::connect(_exitButton, &TitleBarButton::leftClicked,
-                                 this, [this] { this->close(); });
+                                 this, [this] {
+                                     this->close();
+                                 });
 
                 this->ui_.minButton = _minButton;
                 this->ui_.maxButton = _maxButton;
@@ -217,10 +241,12 @@ void BaseWindow::init()
     // TopMost flag overrides setting
     if (!this->flags_.has(TopMost))
     {
-        getSettings()->windowTopMost.connect([this](bool topMost, auto) {
-            this->setWindowFlag(Qt::WindowStaysOnTopHint, topMost);
-            this->show();
-        });
+        getSettings()->windowTopMost.connect(
+            [this](bool topMost, auto) {
+                this->setWindowFlag(Qt::WindowStaysOnTopHint, topMost);
+                this->show();
+            },
+            this->managedConnections_);
     }
 #endif
 }
@@ -439,8 +465,9 @@ TitleBarButton *BaseWindow::addTitleBarButton(const TitleBarButtonStyle &style,
     this->ui_.titlebarBox->insertWidget(1, button);
     button->setButtonStyle(style);
 
-    QObject::connect(button, &TitleBarButton::leftClicked, this,
-                     [onClicked] { onClicked(); });
+    QObject::connect(button, &TitleBarButton::leftClicked, this, [onClicked] {
+        onClicked();
+    });
 
     return button;
 }
@@ -453,8 +480,9 @@ EffectLabel *BaseWindow::addTitleBarLabel(std::function<void()> onClicked)
     this->ui_.buttons.push_back(button);
     this->ui_.titlebarBox->insertWidget(1, button);
 
-    QObject::connect(button, &EffectLabel::leftClicked, this,
-                     [onClicked] { onClicked(); });
+    QObject::connect(button, &EffectLabel::leftClicked, this, [onClicked] {
+        onClicked();
+    });
 
     return button;
 }
@@ -529,8 +557,9 @@ void BaseWindow::resizeEvent(QResizeEvent *)
             ::SetWindowPos((HWND)this->winId(), nullptr, 0, 0,
                            rect.right - rect.left, rect.bottom - rect.top,
                            SWP_NOMOVE | SWP_NOZORDER);
-            QTimer::singleShot(10, this,
-                               [this] { this->isResizeFixing_ = false; });
+            QTimer::singleShot(10, this, [this] {
+                this->isResizeFixing_ = false;
+            });
         });
     }
 #endif
@@ -558,8 +587,9 @@ void BaseWindow::showEvent(QShowEvent *)
     this->moveIntoDesktopRect(this, this->pos());
     if (this->frameless_)
     {
-        QTimer::singleShot(
-            30, this, [this] { this->moveIntoDesktopRect(this, this->pos()); });
+        QTimer::singleShot(30, this, [this] {
+            this->moveIntoDesktopRect(this, this->pos());
+        });
     }
 }
 

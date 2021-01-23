@@ -5,6 +5,8 @@
 #include "common/NetworkRequest.hpp"
 #include "controllers/accounts/AccountController.hpp"
 #include "controllers/highlights/HighlightBlacklistUser.hpp"
+#include "messages/Message.hpp"
+#include "providers/IvrApi.hpp"
 #include "providers/twitch/TwitchChannel.hpp"
 #include "providers/twitch/api/Helix.hpp"
 #include "providers/twitch/api/Kraken.hpp"
@@ -12,19 +14,22 @@
 #include "singletons/Settings.hpp"
 #include "util/LayoutCreator.hpp"
 #include "util/PostToThread.hpp"
+#include "util/Shortcut.hpp"
+#include "util/StreamerMode.hpp"
 #include "widgets/Label.hpp"
+#include "widgets/helper/ChannelView.hpp"
 #include "widgets/helper/EffectLabel.hpp"
 #include "widgets/helper/Line.hpp"
 
 #include <QCheckBox>
 #include <QDesktopServices>
-#include <QLabel>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 
 const QString TEXT_VIEWS("Views: %1");
 const QString TEXT_FOLLOWERS("Followers: %1");
 const QString TEXT_CREATED("Created: %1");
+const QString TEXT_TITLE("%1's Usercard");
 #define TEXT_USER_ID "ID: "
 #define TEXT_UNAVAILABLE "(not available)"
 
@@ -48,17 +53,87 @@ namespace {
 
         return label.getElement();
     };
+
+    bool checkMessageUserName(const QString &userName, MessagePtr message)
+    {
+        if (message->flags.has(MessageFlag::Whisper))
+            return false;
+
+        bool isSubscription = message->flags.has(MessageFlag::Subscription) &&
+                              message->loginName.isEmpty() &&
+                              message->messageText.split(" ").at(0).compare(
+                                  userName, Qt::CaseInsensitive) == 0;
+
+        bool isModAction =
+            message->timeoutUser.compare(userName, Qt::CaseInsensitive) == 0;
+        bool isSelectedUser =
+            message->loginName.compare(userName, Qt::CaseInsensitive) == 0;
+
+        return (isSubscription || isModAction || isSelectedUser);
+    }
+
+    ChannelPtr filterMessages(const QString &userName, ChannelPtr channel)
+    {
+        LimitedQueueSnapshot<MessagePtr> snapshot =
+            channel->getMessageSnapshot();
+
+        ChannelPtr channelPtr(
+            new Channel(channel->getName(), Channel::Type::None));
+
+        for (size_t i = 0; i < snapshot.size(); i++)
+        {
+            MessagePtr message = snapshot[i];
+            if (checkMessageUserName(userName, message))
+            {
+                channelPtr->addMessage(message);
+            }
+        }
+
+        return channelPtr;
+    };
+
+    const auto borderColor = QColor(255, 255, 255, 80);
+
+    int calculateTimeoutDuration(TimeoutButton timeout)
+    {
+        static const QMap<QString, int> durations{
+            {"s", 1}, {"m", 60}, {"h", 3600}, {"d", 86400}, {"w", 604800},
+        };
+        return timeout.second * durations[timeout.first];
+    }
+
 }  // namespace
 
-UserInfoPopup::UserInfoPopup()
-    : BaseWindow({BaseWindow::Frameless, BaseWindow::FramelessDraggable})
+#ifdef Q_OS_LINUX
+FlagsEnum<BaseWindow::Flags> userInfoPopupFlags{BaseWindow::Dialog,
+                                                BaseWindow::EnableCustomFrame};
+FlagsEnum<BaseWindow::Flags> userInfoPopupFlagsCloseAutomatically{
+    BaseWindow::EnableCustomFrame};
+#else
+FlagsEnum<BaseWindow::Flags> userInfoPopupFlags{BaseWindow::EnableCustomFrame};
+FlagsEnum<BaseWindow::Flags> userInfoPopupFlagsCloseAutomatically{
+    BaseWindow::EnableCustomFrame, BaseWindow::Frameless,
+    BaseWindow::FramelessDraggable};
+#endif
+
+UserInfoPopup::UserInfoPopup(bool closeAutomatically, QWidget *parent)
+    : BaseWindow(closeAutomatically ? userInfoPopupFlagsCloseAutomatically
+                                    : userInfoPopupFlags,
+                 parent)
     , hack_(new bool)
 {
+    this->setWindowTitle("Usercard");
     this->setStayInScreenRect(true);
 
-#ifdef Q_OS_LINUX
-    this->setWindowFlag(Qt::Popup);
-#endif
+    if (closeAutomatically)
+        this->setActionOnFocusLoss(BaseWindow::Delete);
+    else
+        this->setAttribute(Qt::WA_DeleteOnClose);
+
+    // Close the popup when Escape is pressed
+    createWindowShortcut(this, "Escape", [this] {
+        this->deleteLater();
+    });
 
     auto layout = LayoutCreator<QWidget>(this->getLayoutContainer())
                       .setLayoutType<QVBoxLayout>();
@@ -76,9 +151,9 @@ UserInfoPopup::UserInfoPopup()
                 QUrl("https://twitch.tv/" + this->userName_.toLower()));
         });
 
-        // items on the right
         auto vbox = head.emplace<QVBoxLayout>();
         {
+            // items on the right
             {
                 auto box = vbox.emplace<QHBoxLayout>()
                                .withoutMargin()
@@ -86,18 +161,21 @@ UserInfoPopup::UserInfoPopup()
                 this->ui_.nameLabel = addCopyableLabel(box);
                 this->ui_.nameLabel->setFontStyle(FontStyle::UiMediumBold);
                 box->addStretch(1);
-                this->ui_.userIDLabel = addCopyableLabel(box);
                 auto palette = QPalette();
                 palette.setColor(QPalette::WindowText, QColor("#aaa"));
+                this->ui_.userIDLabel = addCopyableLabel(box);
                 this->ui_.userIDLabel->setPalette(palette);
             }
 
+            // items on the left
             vbox.emplace<Label>(TEXT_VIEWS.arg(""))
                 .assign(&this->ui_.viewCountLabel);
             vbox.emplace<Label>(TEXT_FOLLOWERS.arg(""))
                 .assign(&this->ui_.followerCountLabel);
             vbox.emplace<Label>(TEXT_CREATED.arg(""))
                 .assign(&this->ui_.createdDateLabel);
+            vbox.emplace<Label>("").assign(&this->ui_.followageLabel);
+            vbox.emplace<Label>("").assign(&this->ui_.subageLabel);
         }
     }
 
@@ -114,13 +192,20 @@ UserInfoPopup::UserInfoPopup()
             .assign(&this->ui_.ignoreHighlights);
         auto usercard = user.emplace<EffectLabel2>(this);
         usercard->getLabel().setText("Usercard");
-
+        auto refresh = user.emplace<EffectLabel2>(this);
+        refresh->getLabel().setText("Refresh");
         auto mod = user.emplace<Button>(this);
         mod->setPixmap(getResources().buttons.mod);
         mod->setScaleIndependantSize(30, 30);
         auto unmod = user.emplace<Button>(this);
         unmod->setPixmap(getResources().buttons.unmod);
         unmod->setScaleIndependantSize(30, 30);
+        auto vip = user.emplace<Button>(this);
+        vip->setPixmap(getResources().buttons.vip);
+        vip->setScaleIndependantSize(30, 30);
+        auto unvip = user.emplace<Button>(this);
+        unvip->setPixmap(getResources().buttons.unvip);
+        unvip->setScaleIndependantSize(30, 30);
 
         user->addStretch(1);
 
@@ -130,15 +215,25 @@ UserInfoPopup::UserInfoPopup()
                                       "/viewercard/" + this->userName_);
         });
 
+        QObject::connect(refresh.getElement(), &Button::leftClicked, [this] {
+            this->updateLatestMessages();
+        });
         QObject::connect(mod.getElement(), &Button::leftClicked, [this] {
             this->channel_->sendMessage("/mod " + this->userName_);
         });
         QObject::connect(unmod.getElement(), &Button::leftClicked, [this] {
             this->channel_->sendMessage("/unmod " + this->userName_);
         });
+        QObject::connect(vip.getElement(), &Button::leftClicked, [this] {
+            this->channel_->sendMessage("/vip " + this->userName_);
+        });
+        QObject::connect(unvip.getElement(), &Button::leftClicked, [this] {
+            this->channel_->sendMessage("/unvip " + this->userName_);
+        });
 
         // userstate
-        this->userStateChanged_.connect([this, mod, unmod]() mutable {
+        this->userStateChanged_.connect([this, mod, unmod, vip,
+                                         unvip]() mutable {
             TwitchChannel *twitchChannel =
                 dynamic_cast<TwitchChannel *>(this->channel_.get());
 
@@ -156,6 +251,8 @@ UserInfoPopup::UserInfoPopup()
             }
             mod->setVisible(visibilityModButtons);
             unmod->setVisible(visibilityModButtons);
+            vip->setVisible(visibilityModButtons);
+            unvip->setVisible(visibilityModButtons);
         });
     }
 
@@ -211,9 +308,32 @@ UserInfoPopup::UserInfoPopup()
         });
     }
 
-    this->installEvents();
+    layout.emplace<Line>(false);
 
+    // fourth line (last messages)
+    auto logs = layout.emplace<QVBoxLayout>().withoutMargin();
+    {
+        this->ui_.noMessagesLabel = new Label("No recent messages");
+        this->ui_.noMessagesLabel->setVisible(false);
+
+        this->ui_.latestMessages = new ChannelView(this);
+        this->ui_.latestMessages->setMinimumSize(400, 275);
+        this->ui_.latestMessages->setSizePolicy(QSizePolicy::Expanding,
+                                                QSizePolicy::Expanding);
+
+        logs->addWidget(this->ui_.noMessagesLabel);
+        logs->addWidget(this->ui_.latestMessages);
+        logs->setAlignment(this->ui_.noMessagesLabel, Qt::AlignHCenter);
+    }
+
+    this->installEvents();
     this->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Policy::Ignored);
+}
+
+// remove once https://github.com/pajlada/signals/pull/10 gets merged
+UserInfoPopup::~UserInfoPopup()
+{
+    this->refreshConnection_.disconnect();
 }
 
 void UserInfoPopup::themeChangedEvent()
@@ -245,22 +365,49 @@ void UserInfoPopup::installEvents()
 
     // follow
     QObject::connect(
-        this->ui_.follow, &QCheckBox::stateChanged, [this](int) mutable {
+        this->ui_.follow, &QCheckBox::stateChanged,
+        [this](int newState) mutable {
             auto currentUser = getApp()->accounts->twitch.getCurrent();
 
             const auto reenableFollowCheckbox = [this] {
-                this->ui_.follow->setEnabled(true);  //
+                this->ui_.follow->setEnabled(true);
             };
 
-            this->ui_.follow->setEnabled(false);
-            if (this->ui_.follow->isChecked())
+            if (!this->ui_.follow->isEnabled())
             {
-                currentUser->followUser(this->userId_, reenableFollowCheckbox);
+                // We received a state update while the checkbox was disabled
+                // This can only happen from the "check current follow state" call
+                // The state has been updated to properly reflect the users current follow state
+                reenableFollowCheckbox();
+                return;
             }
-            else
+
+            switch (newState)
             {
-                currentUser->unfollowUser(this->userId_,
-                                          reenableFollowCheckbox);
+                case Qt::CheckState::Unchecked: {
+                    this->ui_.follow->setEnabled(false);
+                    getHelix()->unfollowUser(currentUser->getUserId(),
+                                             this->userId_,
+                                             reenableFollowCheckbox, [] {
+                                                 //
+                                             });
+                }
+                break;
+
+                case Qt::CheckState::PartiallyChecked: {
+                    // We deliberately ignore this state
+                }
+                break;
+
+                case Qt::CheckState::Checked: {
+                    this->ui_.follow->setEnabled(false);
+                    getHelix()->followUser(currentUser->getUserId(),
+                                           this->userId_,
+                                           reenableFollowCheckbox, [] {
+                                               //
+                                           });
+                }
+                break;
             }
         });
 
@@ -354,6 +501,7 @@ void UserInfoPopup::setData(const QString &name, const ChannelPtr &channel)
 {
     this->userName_ = name;
     this->channel_ = channel;
+    this->setWindowTitle(TEXT_TITLE.arg(name));
 
     this->ui_.nameLabel->setText(name);
     this->ui_.nameLabel->setProperty("copy-text", name);
@@ -361,11 +509,54 @@ void UserInfoPopup::setData(const QString &name, const ChannelPtr &channel)
     this->updateUserData();
 
     this->userStateChanged_.invoke();
+
+    this->updateLatestMessages();
+    QTimer::singleShot(1, this, [this] {
+        this->setStayInScreenRect(true);
+    });
+}
+
+void UserInfoPopup::updateLatestMessages()
+{
+    auto filteredChannel = filterMessages(this->userName_, this->channel_);
+    this->ui_.latestMessages->setChannel(filteredChannel);
+    this->ui_.latestMessages->setSourceChannel(this->channel_);
+
+    const bool hasMessages = filteredChannel->hasMessages();
+    this->ui_.latestMessages->setVisible(hasMessages);
+    this->ui_.noMessagesLabel->setVisible(!hasMessages);
+
+    // shrink dialog in case ChannelView goes from visible to hidden
+    this->adjustSize();
+
+    this->refreshConnection_
+        .disconnect();  // remove once https://github.com/pajlada/signals/pull/10 gets merged
+
+    this->refreshConnection_ = this->channel_->messageAppended.connect(
+        [this, hasMessages](auto message, auto) {
+            if (!checkMessageUserName(this->userName_, message))
+                return;
+
+            if (hasMessages)
+            {
+                // display message in ChannelView
+                this->ui_.latestMessages->channel()->addMessage(message);
+            }
+            else
+            {
+                // The ChannelView is currently hidden, so manually refresh
+                // and display the latest messages
+                this->updateLatestMessages();
+            }
+        });
 }
 
 void UserInfoPopup::updateUserData()
 {
+    this->ui_.follow->setEnabled(false);
+
     std::weak_ptr<bool> hack = this->hack_;
+    auto currentUser = getApp()->accounts->twitch.getCurrent();
 
     const auto onUserFetchFailed = [this, hack] {
         if (!hack.lock())
@@ -381,39 +572,37 @@ void UserInfoPopup::updateUserData()
 
         this->ui_.nameLabel->setText(this->userName_);
 
-        this->ui_.userIDLabel->setText(QString("ID") +
+        this->ui_.userIDLabel->setText(QString("ID ") +
                                        QString(TEXT_UNAVAILABLE));
         this->ui_.userIDLabel->setProperty("copy-text",
                                            QString(TEXT_UNAVAILABLE));
     };
-    const auto onUserFetched = [this, hack](const auto &user) {
+    const auto onUserFetched = [this, hack,
+                                currentUser](const HelixUser &user) {
         if (!hack.lock())
         {
             return;
         }
 
-        auto currentUser = getApp()->accounts->twitch.getCurrent();
-
         this->userId_ = user.id;
 
+        this->ui_.nameLabel->setText(user.displayName);
+        this->setWindowTitle(TEXT_TITLE.arg(user.displayName));
+        this->ui_.viewCountLabel->setText(TEXT_VIEWS.arg(user.viewCount));
+        this->ui_.createdDateLabel->setText(
+            TEXT_CREATED.arg(user.createdAt.section("T", 0, 0)));
         this->ui_.userIDLabel->setText(TEXT_USER_ID + user.id);
         this->ui_.userIDLabel->setProperty("copy-text", user.id);
 
-        this->ui_.viewCountLabel->setText(TEXT_VIEWS.arg(user.viewCount));
-        getKraken()->getUser(
-            user.id,
-            [this, hack](const auto &user) {
-                if (!hack.lock())
-                {
-                    return;
-                }
-                this->ui_.createdDateLabel->setText(
-                    TEXT_CREATED.arg(user.createdAt.section("T", 0, 0)));
-            },
-            [] {
-                // failure
-            });
-        this->loadAvatar(user.profileImageUrl);
+        if (isInStreamerMode() &&
+            getSettings()->streamerModeHideUsercardAvatars)
+        {
+            this->ui_.avatarButton->setPixmap(getResources().streamerMode);
+        }
+        else
+        {
+            this->loadAvatar(user.profileImageUrl);
+        }
 
         getHelix()->getUserFollowers(
             user.id,
@@ -437,8 +626,8 @@ void UserInfoPopup::updateUserData()
             }
             if (result != FollowResult_Failed)
             {
-                this->ui_.follow->setEnabled(true);
                 this->ui_.follow->setChecked(result == FollowResult_Following);
+                this->ui_.follow->setEnabled(true);
             }
         });
 
@@ -476,6 +665,45 @@ void UserInfoPopup::updateUserData()
         this->ui_.ignore->setEnabled(true);
         this->ui_.ignore->setChecked(isIgnoring);
         this->ui_.ignoreHighlights->setChecked(isIgnoringHighlights);
+
+        // get followage and subage
+        getIvr()->getSubage(
+            this->userName_, this->channel_->getName(),
+            [this, hack](const IvrSubage &subageInfo) {
+                if (!hack.lock())
+                {
+                    return;
+                }
+
+                if (!subageInfo.followingSince.isEmpty())
+                {
+                    QDateTime followedAt = QDateTime::fromString(
+                        subageInfo.followingSince, Qt::ISODate);
+                    QString followingSince = followedAt.toString("yyyy-MM-dd");
+                    this->ui_.followageLabel->setText("❤ Following since " +
+                                                      followingSince);
+                }
+
+                if (subageInfo.isSubHidden)
+                {
+                    this->ui_.subageLabel->setText(
+                        "Subscription status hidden");
+                }
+                else if (subageInfo.isSubbed)
+                {
+                    this->ui_.subageLabel->setText(
+                        QString("★ Tier %1 - Subscribed for %2 months")
+                            .arg(subageInfo.subTier)
+                            .arg(subageInfo.totalSubMonths));
+                }
+                else if (subageInfo.totalSubMonths)
+                {
+                    this->ui_.subageLabel->setText(
+                        QString("★ Previously subscribed for %1 months")
+                            .arg(subageInfo.totalSubMonths));
+                }
+            },
+            [] {});
     };
 
     getHelix()->getUserByName(this->userName_, onUserFetched,
@@ -522,99 +750,127 @@ UserInfoPopup::TimeoutWidget::TimeoutWidget()
     QColor color1(255, 255, 255, 80);
     QColor color2(255, 255, 255, 0);
 
-    int buttonWidth = 24;
+    int buttonWidth = 40;
+    // int buttonWidth = 24;
     int buttonWidth2 = 32;
     int buttonHeight = 32;
 
     layout->setSpacing(16);
 
-    auto addButton = [&](Action action, const QString &text,
-                         const QPixmap &pixmap) {
+    //auto addButton = [&](Action action, const QString &text,
+    //                     const QPixmap &pixmap) {
+    //    auto vbox = layout.emplace<QVBoxLayout>().withoutMargin();
+    //    {
+    //        auto title = vbox.emplace<QHBoxLayout>().withoutMargin();
+    //        title->addStretch(1);
+    //        auto label = title.emplace<Label>(text);
+    //        label->setHasOffset(false);
+    //        label->setStyleSheet("color: #BBB");
+    //        title->addStretch(1);
+
+    //        auto hbox = vbox.emplace<QHBoxLayout>().withoutMargin();
+    //        hbox->setSpacing(0);
+    //        {
+    //            auto button = hbox.emplace<Button>(nullptr);
+    //            button->setPixmap(pixmap);
+    //            button->setScaleIndependantSize(buttonHeight, buttonHeight);
+    //            button->setBorderColor(QColor(255, 255, 255, 127));
+
+    //            QObject::connect(
+    //                button.getElement(), &Button::leftClicked, [this, action] {
+    //                    this->buttonClicked.invoke(std::make_pair(action, -1));
+    //                });
+    //        }
+    //    }
+    //};
+
+    const auto addLayout = [&](const QString &text) {
         auto vbox = layout.emplace<QVBoxLayout>().withoutMargin();
+        auto title = vbox.emplace<QHBoxLayout>().withoutMargin();
+        title->addStretch(1);
+        auto label = title.emplace<Label>(text);
+        label->setStyleSheet("color: #BBB");
+        label->setHasOffset(false);
+        title->addStretch(1);
+
+        auto hbox = vbox.emplace<QHBoxLayout>().withoutMargin();
+        hbox->setSpacing(0);
+        return hbox;
+    };
+
+    const auto addButton = [&](Action action, const QString &title,
+                               const QPixmap &pixmap) {
+        auto button = addLayout(title).emplace<Button>(nullptr);
+        button->setPixmap(pixmap);
+        button->setScaleIndependantSize(buttonHeight, buttonHeight);
+        button->setBorderColor(QColor(255, 255, 255, 127));
+
+        QObject::connect(
+            button.getElement(), &Button::leftClicked, [this, action] {
+                this->buttonClicked.invoke(std::make_pair(action, -1));
+            });
+    };
+
+    auto addTimeouts = [&](const QString &title) {
+        auto hbox = addLayout(title);
+
+        for (const auto &item : getSettings()->timeoutButtons.getValue())
         {
-            auto title = vbox.emplace<QHBoxLayout>().withoutMargin();
-            title->addStretch(1);
-            auto label = title.emplace<Label>(text);
-            label->setHasOffset(false);
-            label->setStyleSheet("color: #BBB");
-            title->addStretch(1);
+            auto a = hbox.emplace<EffectLabel2>();
+            a->getLabel().setText(QString::number(item.second) + item.first);
 
-            auto hbox = vbox.emplace<QHBoxLayout>().withoutMargin();
-            hbox->setSpacing(0);
-            {
-                auto button = hbox.emplace<Button>(nullptr);
-                button->setPixmap(pixmap);
-                button->setScaleIndependantSize(buttonHeight, buttonHeight);
-                button->setBorderColor(QColor(255, 255, 255, 127));
+            a->setScaleIndependantSize(buttonWidth, buttonHeight);
+            a->setBorderColor(borderColor);
 
-                QObject::connect(
-                    button.getElement(), &Button::leftClicked, [this, action] {
-                        this->buttonClicked.invoke(std::make_pair(action, -1));
-                    });
-            }
+            const auto pair =
+                std::make_pair(Action::Timeout, calculateTimeoutDuration(item));
+
+            QObject::connect(a.getElement(), &EffectLabel2::leftClicked,
+                             [this, pair] {
+                                 this->buttonClicked.invoke(pair);
+                             });
+
+            //auto addTimeouts = [&](const QString &title_,
+            //                       const std::vector<std::pair<QString, int>> &items) {
+            //    auto vbox = layout.emplace<QVBoxLayout>().withoutMargin();
+            //    {
+            //        auto title = vbox.emplace<QHBoxLayout>().withoutMargin();
+            //        title->addStretch(1);
+            //        auto label = title.emplace<Label>(title_);
+            //        label->setStyleSheet("color: #BBB");
+            //        label->setHasOffset(false);
+            //        title->addStretch(1);
+
+            //        auto hbox = vbox.emplace<QHBoxLayout>().withoutMargin();
+            //        hbox->setSpacing(0);
+
+            //        for (const auto &item : items)
+            //        {
+            //            auto a = hbox.emplace<EffectLabel2>();
+            //            a->getLabel().setText(std::get<0>(item));
+
+            //            if (std::get<0>(item).length() > 1)
+            //            {
+            //                a->setScaleIndependantSize(buttonWidth2, buttonHeight);
+            //            }
+            //            else
+            //            {
+            //                a->setScaleIndependantSize(buttonWidth, buttonHeight);
+            //            }
+            //            a->setBorderColor(color1);
+
+            //            QObject::connect(a.getElement(), &EffectLabel2::leftClicked,
+            //                             [this, timeout = std::get<1>(item)] {
+            //                                 this->buttonClicked.invoke(std::make_pair(
+            //                                     Action::Timeout, timeout));
+            //                             });
+            //        }
         }
     };
 
-    auto addTimeouts = [&](const QString &title_,
-                           const std::vector<std::pair<QString, int>> &items) {
-        auto vbox = layout.emplace<QVBoxLayout>().withoutMargin();
-        {
-            auto title = vbox.emplace<QHBoxLayout>().withoutMargin();
-            title->addStretch(1);
-            auto label = title.emplace<Label>(title_);
-            label->setStyleSheet("color: #BBB");
-            label->setHasOffset(false);
-            title->addStretch(1);
-
-            auto hbox = vbox.emplace<QHBoxLayout>().withoutMargin();
-            hbox->setSpacing(0);
-
-            for (const auto &item : items)
-            {
-                auto a = hbox.emplace<EffectLabel2>();
-                a->getLabel().setText(std::get<0>(item));
-
-                if (std::get<0>(item).length() > 1)
-                {
-                    a->setScaleIndependantSize(buttonWidth2, buttonHeight);
-                }
-                else
-                {
-                    a->setScaleIndependantSize(buttonWidth, buttonHeight);
-                }
-                a->setBorderColor(color1);
-
-                QObject::connect(a.getElement(), &EffectLabel2::leftClicked,
-                                 [this, timeout = std::get<1>(item)] {
-                                     this->buttonClicked.invoke(std::make_pair(
-                                         Action::Timeout, timeout));
-                                 });
-            }
-        }
-    };
-
-    addButton(Unban, "unban", getResources().buttons.unban);
-
-    addTimeouts("sec", {{"1", 1}});
-    addTimeouts("min", {
-                           {"1", 1 * 60},
-                           {"5", 5 * 60},
-                           {"10", 10 * 60},
-                       });
-    addTimeouts("hour", {
-                            {"1", 1 * 60 * 60},
-                            {"4", 4 * 60 * 60},
-                        });
-    addTimeouts("days", {
-                            {"1", 1 * 60 * 60 * 24},
-                            {"3", 3 * 60 * 60 * 24},
-                        });
-    addTimeouts("weeks", {
-                             {"1", 1 * 60 * 60 * 24 * 7},
-                             {"2", 2 * 60 * 60 * 24 * 7},
-                         });
-
-    addButton(Ban, "ban", getResources().buttons.ban);
+    addButton(Unban, "Unban", getResources().buttons.unban);
+    addTimeouts("Timeouts");
+    addButton(Ban, "Ban", getResources().buttons.ban);
 }
 
 void UserInfoPopup::TimeoutWidget::paintEvent(QPaintEvent *)

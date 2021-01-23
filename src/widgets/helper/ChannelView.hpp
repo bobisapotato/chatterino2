@@ -10,6 +10,7 @@
 #include <unordered_set>
 
 #include "common/FlagsEnum.hpp"
+#include "controllers/filters/FilterSet.hpp"
 #include "messages/Image.hpp"
 #include "messages/LimitedQueue.hpp"
 #include "messages/LimitedQueueSnapshot.hpp"
@@ -31,7 +32,7 @@ using MessageFlags = FlagsEnum<MessageFlag>;
 class MessageLayout;
 using MessageLayoutPtr = std::shared_ptr<MessageLayout>;
 
-enum class MessageElementFlag;
+enum class MessageElementFlag : int64_t;
 using MessageElementFlags = FlagsEnum<MessageElementFlag>;
 
 class Scrollbar;
@@ -75,6 +76,14 @@ public:
 
     ChannelPtr channel();
     void setChannel(ChannelPtr channel_);
+
+    void setFilters(const QList<QUuid> &ids);
+    const QList<QUuid> getFilterIds() const;
+    FilterSetPtr getFilterSet() const;
+
+    ChannelPtr sourceChannel() const;
+    void setSourceChannel(ChannelPtr sourceChannel);
+    bool hasSourceChannel() const;
 
     LimitedQueueSnapshot<MessageLayoutPtr> getMessagesSnapshot();
     void queueLayout();
@@ -141,9 +150,9 @@ private:
 
     void handleMouseClick(QMouseEvent *event,
                           const MessageLayoutElement *hoverLayoutElement,
-                          MessageLayout *layout);
+                          MessageLayoutPtr layout);
     void addContextMenuItems(const MessageLayoutElement *hoveredElement,
-                             MessageLayout *layout);
+                             MessageLayoutPtr layout);
     int getLayoutWidth() const;
     void updatePauses();
     void unpaused();
@@ -173,10 +182,20 @@ private:
 
     LimitedQueueSnapshot<MessageLayoutPtr> snapshot_;
 
-    ChannelPtr channel_;
+    ChannelPtr channel_ = nullptr;
+    ChannelPtr underlyingChannel_ = nullptr;
+    ChannelPtr sourceChannel_ = nullptr;
 
     Scrollbar *scrollBar_;
     EffectLabel *goToBottom_;
+
+    FilterSetPtr channelFilters_;
+
+    // Returns true if message should be included
+    bool shouldIncludeMessage(const MessagePtr &m) const;
+
+    // Returns whether the scrollbar should have highlights
+    bool showScrollbarHighlights() const;
 
     // This variable can be used to decide whether or not we should render the
     // "Show latest messages" button

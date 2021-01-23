@@ -38,7 +38,9 @@ bool Toasts::isEnabled()
 {
 #ifdef Q_OS_WIN
     return WinToastLib::WinToast::isCompatible() &&
-           getSettings()->notificationToast;
+           getSettings()->notificationToast &&
+           !(isInStreamerMode() &&
+             getSettings()->streamerModeSupressLiveNotifications);
 #else
     return false;
 #endif
@@ -134,7 +136,9 @@ public:
             case ToastReaction::OpenInPlayer:
                 if (platform_ == Platform::Twitch)
                 {
-                    link = "https://player.twitch.tv/?channel=" + channelName_;
+                    link =
+                        "https://player.twitch.tv/?parent=twitch.tv&channel=" +
+                        channelName_;
                 }
                 QDesktopServices::openUrl(QUrl(link));
                 break;
