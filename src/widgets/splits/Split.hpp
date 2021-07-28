@@ -38,7 +38,6 @@ class Split : public BaseWidget, pajlada::Signals::SignalHolder
     Q_OBJECT
 
 public:
-    explicit Split(SplitContainer *parent);
     explicit Split(QWidget *parent);
 
     ~Split() override;
@@ -48,7 +47,7 @@ public:
     pajlada::Signals::NoArgSignal focusLost;
 
     ChannelView &getChannelView();
-    SplitContainer *getContainer();
+    SplitInput &getInput();
 
     IndirectChannel getIndirectChannel();
     ChannelPtr getChannel();
@@ -80,6 +79,24 @@ public:
         modifierStatusChanged;
     static Qt::KeyboardModifiers modifierStatus;
 
+    enum class Action {
+        RefreshTab,
+        ResetMouseStatus,
+        AppendNewSplit,
+        Delete,
+
+        SelectSplitLeft,
+        SelectSplitRight,
+        SelectSplitAbove,
+        SelectSplitBelow,
+    };
+
+    pajlada::Signals::Signal<Action> actionRequested;
+    pajlada::Signals::Signal<ChannelPtr> openSplitRequested;
+
+    // args: (SplitContainer::Direction dir, Split* parent)
+    pajlada::Signals::Signal<int, Split *> insertSplitRequested;
+
 protected:
     void paintEvent(QPaintEvent *event) override;
     void mouseMoveEvent(QMouseEvent *event) override;
@@ -98,7 +115,19 @@ private:
     void handleModifiers(Qt::KeyboardModifiers modifiers);
     void updateInputPlaceholder();
 
-    SplitContainer *container_;
+    /**
+     * @brief Opens twitch channel stream in a browser player (opens a formatted link)
+     */
+    void openChannelInBrowserPlayer(ChannelPtr channel);
+    /**
+     * @brief Opens twitch channel stream in streamlink app (if stream is live and streamlink is installed)
+     */
+    void openChannelInStreamlink(QString channelName);
+    /**
+     * @brief Opens twitch channel chat in a new chatterino tab
+     */
+    void joinChannelInNewTab(ChannelPtr channel);
+
     IndirectChannel channel_;
 
     bool moderationMode_{};

@@ -24,14 +24,12 @@
 #include "widgets/dialogs/QualityPopup.hpp"
 #include "widgets/dialogs/SelectChannelDialog.hpp"
 #include "widgets/dialogs/SelectChannelFiltersDialog.hpp"
-#include "widgets/dialogs/TextInputDialog.hpp"
 #include "widgets/dialogs/UserInfoPopup.hpp"
 #include "widgets/helper/ChannelView.hpp"
 #include "widgets/helper/DebugPopup.hpp"
 #include "widgets/helper/NotebookTab.hpp"
 #include "widgets/helper/ResizingTextEdit.hpp"
 #include "widgets/helper/SearchPopup.hpp"
-#include "widgets/splits/ClosedSplits.hpp"
 #include "widgets/splits/SplitContainer.hpp"
 #include "widgets/splits/SplitHeader.hpp"
 #include "widgets/splits/SplitInput.hpp"
@@ -78,15 +76,8 @@ namespace {
 pajlada::Signals::Signal<Qt::KeyboardModifiers> Split::modifierStatusChanged;
 Qt::KeyboardModifiers Split::modifierStatus = Qt::NoModifier;
 
-Split::Split(SplitContainer *parent)
-    : Split(static_cast<QWidget *>(parent))
-{
-    this->container_ = parent;
-}
-
 Split::Split(QWidget *parent)
     : BaseWidget(parent)
-    , container_(nullptr)
     , channel_(Channel::getEmpty())
     , vbox_(new QVBoxLayout(this))
     , header_(new SplitHeader(this))
@@ -172,9 +163,30 @@ Split::Split(QWidget *parent)
         }
     });
 
-    this->view_->joinToChannel.connect([this](QString twitchChannel) {
-        this->container_->appendNewSplit(false)->setChannel(
-            getApp()->twitch.server->getOrAddChannel(twitchChannel));
+    this->view_->openChannelIn.connect([this](
+                                           QString twitchChannel,
+                                           FromTwitchLinkOpenChannelIn openIn) {
+        ChannelPtr channel =
+            getApp()->twitch.server->getOrAddChannel(twitchChannel);
+        switch (openIn)
+        {
+            case FromTwitchLinkOpenChannelIn::Split:
+                this->openSplitRequested.invoke(channel);
+                break;
+            case FromTwitchLinkOpenChannelIn::Tab:
+                this->joinChannelInNewTab(channel);
+                break;
+            case FromTwitchLinkOpenChannelIn::BrowserPlayer:
+                this->openChannelInBrowserPlayer(channel);
+                break;
+            case FromTwitchLinkOpenChannelIn::Streamlink:
+                this->openChannelInStreamlink(twitchChannel);
+                break;
+            default:
+                qCWarning(chatterinoWidget)
+                    << "Unhandled \"FromTwitchLinkOpenChannelIn\" enum value: "
+                    << static_cast<int>(openIn);
+        }
     });
 
     this->input_->textChanged.connect([=](const QString &newText) {
@@ -294,19 +306,9 @@ ChannelView &Split::getChannelView()
     return *this->view_;
 }
 
-SplitContainer *Split::getContainer()
+SplitInput &Split::getInput()
 {
-    return this->container_;
-}
-
-bool Split::isInContainer() const
-{
-    return this->container_ != nullptr;
-}
-
-void Split::setContainer(SplitContainer *container)
-{
-    this->container_ = container;
+    return *this->input_;
 }
 
 void Split::updateInputPlaceholder()
@@ -331,6 +333,39 @@ void Split::updateInputPlaceholder()
     }
 
     this->input_->ui_.textEdit->setPlaceholderText(placeholderText);
+}
+
+void Split::joinChannelInNewTab(ChannelPtr channel)
+{
+    auto &nb = getApp()->windows->getMainWindow().getNotebook();
+    SplitContainer *container = nb.addPage(true);
+
+    Split *split = new Split(container);
+    split->setChannel(channel);
+    container->appendSplit(split);
+}
+
+void Split::openChannelInBrowserPlayer(ChannelPtr channel)
+{
+    if (auto twitchChannel = dynamic_cast<TwitchChannel *>(channel.get()))
+    {
+        QDesktopServices::openUrl(
+            "https://player.twitch.tv/?parent=twitch.tv&channel=" +
+            twitchChannel->getName());
+    }
+}
+
+void Split::openChannelInStreamlink(QString channelName)
+{
+    try
+    {
+        openStreamlinkForChannel(channelName);
+    }
+    catch (const Exception &ex)
+    {
+        qCWarning(chatterinoWidget)
+            << "Error in doOpenStreamlink:" << ex.what();
+    }
 }
 
 IndirectChannel Split::getIndirectChannel()
@@ -388,7 +423,7 @@ void Split::setChannel(IndirectChannel newChannel)
     }
 
     this->channel_.get()->displayNameChanged.connect([this] {
-        this->container_->refreshTab();
+        this->actionRequested.invoke(Action::RefreshTab);
     });
 
     this->channelChanged.invoke();
@@ -435,10 +470,7 @@ void Split::showChangeChannelPopup(const char *dialogTitle, bool empty,
         if (dialog->hasSeletedChannel())
         {
             this->setChannel(dialog->getSelectedChannel());
-            if (this->isInContainer())
-            {
-                this->container_->refreshTab();
-            }
+            this->actionRequested.invoke(Action::RefreshTab);
         }
 
         callback(dialog->hasSeletedChannel());
@@ -514,10 +546,7 @@ void Split::enterEvent(QEvent *event)
         this->overlay_->show();
     }
 
-    if (this->container_ != nullptr)
-    {
-        this->container_->resetMouseStatus();
-    }
+    this->actionRequested.invoke(Action::ResetMouseStatus);
 }
 
 void Split::leaveEvent(QEvent *event)
@@ -554,23 +583,12 @@ void Split::setIsTopRightSplit(bool value)
 /// Slots
 void Split::addSibling()
 {
-    if (this->container_)
-    {
-        this->container_->appendNewSplit(true);
-    }
+    this->actionRequested.invoke(Action::AppendNewSplit);
 }
 
 void Split::deleteFromContainer()
 {
-    if (this->container_)
-    {
-        this->container_->deleteSplit(this);
-        auto *tab = this->getContainer()->getTab();
-        tab->connect(tab, &QWidget::destroyed, [tab]() mutable {
-            ClosedSplits::invalidateTab(tab);
-        });
-        ClosedSplits::push({this->getChannel()->getName(), tab});
-    }
+    this->actionRequested.invoke(Action::Delete);
 }
 
 void Split::changeChannel()
@@ -636,13 +654,7 @@ void Split::openWhispersInBrowser()
 
 void Split::openBrowserPlayer()
 {
-    ChannelPtr channel = this->getChannel();
-    if (auto twitchChannel = dynamic_cast<TwitchChannel *>(channel.get()))
-    {
-        QDesktopServices::openUrl(
-            "https://player.twitch.tv/?parent=twitch.tv&channel=" +
-            twitchChannel->getName());
-    }
+    this->openChannelInBrowserPlayer(this->getChannel());
 }
 
 void Split::openModViewInBrowser()
@@ -658,15 +670,7 @@ void Split::openModViewInBrowser()
 
 void Split::openInStreamlink()
 {
-    try
-    {
-        openStreamlinkForChannel(this->getChannel()->getName());
-    }
-    catch (const Exception &ex)
-    {
-        qCWarning(chatterinoWidget)
-            << "Error in doOpenStreamlink:" << ex.what();
-    }
+    this->openChannelInStreamlink(this->getChannel()->getName());
 }
 
 void Split::openWithCustomScheme()
@@ -763,7 +767,7 @@ void Split::showViewerList()
         auto query = searchBar->text();
         if (!query.isEmpty())
         {
-            auto results = chattersList->findItems(query, Qt::MatchStartsWith);
+            auto results = chattersList->findItems(query, Qt::MatchContains);
             chattersList->hide();
             resultList->clear();
             for (auto &item : results)

@@ -1,15 +1,17 @@
 #include "Args.hpp"
 
-#include <QApplication>
-#include <QCommandLineParser>
-#include <QDebug>
-#include <QStringList>
 #include "common/QLogging.hpp"
 #include "singletons/Paths.hpp"
 #include "singletons/WindowManager.hpp"
 #include "util/AttachToConsole.hpp"
 #include "util/CombinePath.hpp"
 #include "widgets/Window.hpp"
+
+#include <QApplication>
+#include <QCommandLineParser>
+#include <QDebug>
+#include <QStringList>
+#include <QUuid>
 
 namespace chatterino {
 
@@ -26,6 +28,9 @@ Args::Args(const QApplication &app)
     // Added to ignore the parent-window option passed during native messaging
     QCommandLineOption parentWindowOption("parent-window");
     parentWindowOption.setFlags(QCommandLineOption::HiddenFromHelp);
+    QCommandLineOption parentWindowIdOption("x-attach-split-to-window", "",
+                                            "window-id");
+    parentWindowIdOption.setFlags(QCommandLineOption::HiddenFromHelp);
 
     // Verbose
     QCommandLineOption verboseOption({{"v", "verbose"},
@@ -37,6 +42,7 @@ Args::Args(const QApplication &app)
         {{"V", "version"}, "Displays version information."},
         crashRecoveryOption,
         parentWindowOption,
+        parentWindowIdOption,
         verboseOption,
     });
     parser.addOption(QCommandLineOption(
@@ -73,6 +79,15 @@ Args::Args(const QApplication &app)
 
     this->printVersion = parser.isSet("V");
     this->crashRecovery = parser.isSet("crash-recovery");
+
+    if (parser.isSet(parentWindowIdOption))
+    {
+        this->isFramelessEmbed = true;
+        this->dontSaveSettings = true;
+        this->dontLoadMainWindow = true;
+
+        this->parentWindowId = parser.value(parentWindowIdOption).toULongLong();
+    }
 }
 
 void Args::applyCustomChannelLayout(const QString &argValue)
@@ -118,11 +133,11 @@ void Args::applyCustomChannelLayout(const QString &argValue)
         QString platform = "t";
         QString channelName = channelArg;
 
-        const QRegExp regExp("(.):(.*)");
-        if (regExp.indexIn(channelArg) != -1)
+        const QRegularExpression regExp("(.):(.*)");
+        if (auto match = regExp.match(channelArg); match.hasMatch())
         {
-            platform = regExp.cap(1);
-            channelName = regExp.cap(2);
+            platform = match.captured(1);
+            channelName = match.captured(2);
         }
 
         // Twitch (default)
@@ -132,7 +147,7 @@ void Args::applyCustomChannelLayout(const QString &argValue)
 
             // Set first tab as selected
             tab.selected_ = window.tabs_.empty();
-            tab.rootNode_ = SplitNodeDescriptor{"twitch", channelName};
+            tab.rootNode_ = SplitNodeDescriptor{{"twitch", channelName}};
 
             window.tabs_.emplace_back(std::move(tab));
         }

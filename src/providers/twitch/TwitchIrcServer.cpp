@@ -17,6 +17,8 @@
 #include "providers/twitch/TwitchHelpers.hpp"
 #include "util/PostToThread.hpp"
 
+#include <QMetaEnum>
+
 // using namespace Communi;
 using namespace std::chrono_literals;
 
@@ -26,6 +28,7 @@ TwitchIrcServer::TwitchIrcServer()
     : whispersChannel(new Channel("/whispers", Channel::Type::TwitchWhispers))
     , mentionsChannel(new Channel("/mentions", Channel::Type::TwitchMentions))
     , watchingChannel(Channel::getEmpty(), Channel::Type::TwitchWatching)
+    , liveChannel(new Channel("/live", Channel::Type::TwitchLive))
 {
     this->initializeIrc();
 
@@ -45,7 +48,6 @@ void TwitchIrcServer::initialize(Settings &settings, Paths &paths)
         });
     });
 
-    this->twitchBadges.loadTwitchBadges();
     this->bttv.loadEmotes();
     this->ffz.loadEmotes();
 }
@@ -57,6 +59,19 @@ void TwitchIrcServer::initializeConnection(IrcConnection *connection,
         getApp()->accounts->twitch.getCurrent();
 
     qCDebug(chatterinoTwitch) << "logging in as" << account->getUserName();
+
+    // twitch.tv/tags enables IRCv3 tags on messages. See https://dev.twitch.tv/docs/irc/tags
+    // twitch.tv/commands enables a bunch of miscellaneous command capabilities. See https://dev.twitch.tv/docs/irc/commands
+    // twitch.tv/membership enables the JOIN/PART/NAMES commands. See https://dev.twitch.tv/docs/irc/membership
+    // This is enabled so we receive USERSTATE messages when joining channels / typing messages, along with the other command capabilities
+    QStringList caps{"twitch.tv/tags", "twitch.tv/commands"};
+    if (type != ConnectionType::Write)
+    {
+        caps.push_back("twitch.tv/membership");
+    }
+
+    connection->network()->setSkipCapabilityValidation(true);
+    connection->network()->setRequestedCapabilities(caps);
 
     QString username = account->getUserName();
     QString oauthToken = account->getOAuthToken();
@@ -88,8 +103,8 @@ void TwitchIrcServer::initializeConnection(IrcConnection *connection,
 std::shared_ptr<Channel> TwitchIrcServer::createChannel(
     const QString &channelName)
 {
-    auto channel = std::shared_ptr<TwitchChannel>(new TwitchChannel(
-        channelName, this->twitchBadges, this->bttv, this->ffz));
+    auto channel =
+        std::shared_ptr<TwitchChannel>(new TwitchChannel(channelName));
     channel->initialize();
 
     channel->sendMessageSignal.connect(
@@ -122,11 +137,7 @@ void TwitchIrcServer::readConnectionMessageReceived(
     auto &handler = IrcMessageHandler::instance();
 
     // Below commands enabled through the twitch.tv/membership CAP REQ
-    if (command == "MODE")
-    {
-        handler.handleModeMessage(message);
-    }
-    else if (command == "JOIN")
+    if (command == "JOIN")
     {
         handler.handleJoinMessage(message);
     }
@@ -170,6 +181,10 @@ void TwitchIrcServer::readConnectionMessageReceived(
         this->addGlobalSystemMessage(
             "Twitch Servers requested us to reconnect, reconnecting");
         this->connect();
+    }
+    else if (command == "GLOBALUSERSTATE")
+    {
+        handler.handleGlobalUserStateMessage(message);
     }
 }
 
@@ -221,28 +236,6 @@ void TwitchIrcServer::writeConnectionMessageReceived(
     }
 }
 
-void TwitchIrcServer::onReadConnected(IrcConnection *connection)
-{
-    // twitch.tv/tags enables IRCv3 tags on messages. See https://dev.twitch.tv/docs/irc/tags/
-    // twitch.tv/membership enables the JOIN/PART/MODE/NAMES commands. See https://dev.twitch.tv/docs/irc/membership/
-    // twitch.tv/commands enables a bunch of miscellaneous command capabilities. See https://dev.twitch.tv/docs/irc/commands/
-    //                    This is enabled here so we receive USERSTATE messages when joining channels
-    connection->sendRaw(
-        "CAP REQ :twitch.tv/tags twitch.tv/membership twitch.tv/commands");
-
-    AbstractIrcServer::onReadConnected(connection);
-}
-
-void TwitchIrcServer::onWriteConnected(IrcConnection *connection)
-{
-    // twitch.tv/tags enables IRCv3 tags on messages. See https://dev.twitch.tv/docs/irc/tags/
-    // twitch.tv/commands enables a bunch of miscellaneous command capabilities. See https://dev.twitch.tv/docs/irc/commands/
-    //                    This is enabled here so we receive USERSTATE messages when typing messages, along with the other command capabilities
-    connection->sendRaw("CAP REQ :twitch.tv/tags twitch.tv/commands");
-
-    AbstractIrcServer::onWriteConnected(connection);
-}
-
 std::shared_ptr<Channel> TwitchIrcServer::getCustomChannel(
     const QString &channelName)
 {
@@ -254,6 +247,11 @@ std::shared_ptr<Channel> TwitchIrcServer::getCustomChannel(
     if (channelName == "/mentions")
     {
         return this->mentionsChannel;
+    }
+
+    if (channelName == "/live")
+    {
+        return this->liveChannel;
     }
 
     if (channelName == "$$$")
@@ -288,6 +286,7 @@ void TwitchIrcServer::forEachChannelAndSpecialChannels(
 
     func(this->whispersChannel);
     func(this->mentionsChannel);
+    func(this->liveChannel);
 }
 
 std::shared_ptr<Channel> TwitchIrcServer::getChannelOrEmptyByID(

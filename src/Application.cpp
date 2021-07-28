@@ -9,6 +9,7 @@
 #include "controllers/commands/CommandController.hpp"
 #include "controllers/ignores/IgnoreController.hpp"
 #include "controllers/notifications/NotificationController.hpp"
+#include "debug/AssertInGuiThread.hpp"
 #include "messages/MessageBuilder.hpp"
 #include "providers/bttv/BttvEmotes.hpp"
 #include "providers/chatterino/ChatterinoBadges.hpp"
@@ -17,6 +18,7 @@
 #include "providers/irc/Irc2.hpp"
 #include "providers/twitch/PubsubClient.hpp"
 #include "providers/twitch/TwitchIrcServer.hpp"
+#include "providers/twitch/TwitchMessageBuilder.hpp"
 #include "singletons/Emotes.hpp"
 #include "singletons/Fonts.hpp"
 #include "singletons/Logging.hpp"
@@ -34,6 +36,8 @@
 #include "widgets/Notebook.hpp"
 #include "widgets/Window.hpp"
 #include "widgets/splits/Split.hpp"
+
+#include <QDesktopServices>
 
 namespace chatterino {
 
@@ -76,7 +80,8 @@ void Application::initialize(Settings &settings, Paths &paths)
     isAppInitialized = true;
 
     // Show changelog
-    if (getSettings()->currentVersion.getValue() != "" &&
+    if (!getArgs().isFramelessEmbed &&
+        getSettings()->currentVersion.getValue() != "" &&
         getSettings()->currentVersion.getValue() != CHATTERINO_VERSION)
     {
         auto box = new QMessageBox(QMessageBox::Information, "Chatterino 2",
@@ -90,11 +95,14 @@ void Application::initialize(Settings &settings, Paths &paths)
         }
     }
 
-    getSettings()->currentVersion.setValue(CHATTERINO_VERSION);
-
-    if (getSettings()->enableExperimentalIrc)
+    if (!getArgs().isFramelessEmbed)
     {
-        Irc::instance().load();
+        getSettings()->currentVersion.setValue(CHATTERINO_VERSION);
+
+        if (getSettings()->enableExperimentalIrc)
+        {
+            Irc::instance().load();
+        }
     }
 
     for (auto &singleton : this->singletons_)
@@ -103,7 +111,7 @@ void Application::initialize(Settings &settings, Paths &paths)
     }
 
     // add crash message
-    if (getArgs().crashRecovery)
+    if (!getArgs().isFramelessEmbed && getArgs().crashRecovery)
     {
         if (auto selected =
                 this->windows->getMainWindow().getNotebook().getSelectedPage())
@@ -126,7 +134,10 @@ void Application::initialize(Settings &settings, Paths &paths)
 
     this->windows->updateWordTypeMask();
 
-    this->initNm(paths);
+    if (!getArgs().isFramelessEmbed)
+    {
+        this->initNm(paths);
+    }
     this->initPubsub();
 }
 
@@ -136,7 +147,10 @@ int Application::run(QApplication &qtApp)
 
     this->twitch.server->connect();
 
-    this->windows->getMainWindow().show();
+    if (!getArgs().isFramelessEmbed)
+    {
+        this->windows->getMainWindow().show();
+    }
 
     getSettings()->betaUpdates.connect(
         [] {
@@ -151,6 +165,10 @@ int Application::run(QApplication &qtApp)
         this->windows->forceLayoutChannelViews();
     });
     getSettings()->highlightedUsers.delayedItemsChanged.connect([this] {
+        this->windows->forceLayoutChannelViews();
+    });
+
+    getSettings()->removeSpacesBetweenEmotes.connect([this] {
         this->windows->forceLayoutChannelViews();
     });
 
@@ -189,7 +207,7 @@ void Application::initPubsub()
             }
 
             QString text =
-                QString("%1 cleared the chat").arg(action.source.name);
+                QString("%1 cleared the chat").arg(action.source.login);
 
             auto msg = makeSystemMessage(text);
             postToThread([chan, msg] {
@@ -208,15 +226,14 @@ void Application::initPubsub()
 
             QString text =
                 QString("%1 turned %2 %3 mode")
-                    .arg(action.source.name)
+                    .arg(action.source.login)
                     .arg(action.state == ModeChangedAction::State::On ? "on"
                                                                       : "off")
                     .arg(action.getModeName());
 
             if (action.duration > 0)
             {
-                text.append(" (" + QString::number(action.duration) +
-                            " seconds)");
+                text += QString(" (%1 seconds)").arg(action.duration);
             }
 
             auto msg = makeSystemMessage(text);
@@ -236,16 +253,10 @@ void Application::initPubsub()
 
             QString text;
 
-            if (action.modded)
-            {
-                text = QString("%1 modded %2")
-                           .arg(action.source.name, action.target.name);
-            }
-            else
-            {
-                text = QString("%1 unmodded %2")
-                           .arg(action.source.name, action.target.name);
-            }
+            text = QString("%1 %2 %3")
+                       .arg(action.source.login,
+                            (action.modded ? "modded" : "unmodded"),
+                            action.target.login);
 
             auto msg = makeSystemMessage(text);
             postToThread([chan, msg] {
@@ -268,6 +279,46 @@ void Application::initPubsub()
 
             postToThread([chan, msg = msg.release()] {
                 chan->addOrReplaceTimeout(msg);
+            });
+        });
+    this->twitch.pubsub->signals_.moderation.messageDeleted.connect(
+        [&](const auto &action) {
+            auto chan =
+                this->twitch.server->getChannelOrEmptyByID(action.roomID);
+
+            if (chan->isEmpty())
+            {
+                return;
+            }
+
+            MessageBuilder msg;
+            TwitchMessageBuilder::deletionMessage(action, &msg);
+            msg->flags.set(MessageFlag::PubSub);
+
+            postToThread([chan, msg = msg.release()] {
+                auto replaced = false;
+                LimitedQueueSnapshot<MessagePtr> snapshot =
+                    chan->getMessageSnapshot();
+                int snapshotLength = snapshot.size();
+
+                // without parens it doesn't build on windows
+                int end = (std::max)(0, snapshotLength - 200);
+
+                for (int i = snapshotLength - 1; i >= end; --i)
+                {
+                    auto &s = snapshot[i];
+                    if (!s->flags.has(MessageFlag::PubSub) &&
+                        s->timeoutUser == msg->timeoutUser)
+                    {
+                        chan->replaceMessage(s, msg);
+                        replaced = true;
+                        break;
+                    }
+                }
+                if (!replaced)
+                {
+                    chan->addMessage(msg);
+                }
             });
         });
 
@@ -299,7 +350,7 @@ void Application::initPubsub()
             }
 
             postToThread([chan, action] {
-                auto p = makeAutomodMessage(action);
+                const auto p = makeAutomodMessage(action);
                 chan->addMessage(p.first);
                 chan->addMessage(p.second);
             });
@@ -321,6 +372,22 @@ void Application::initPubsub()
                 chan->addMessage(msg);
             });
             chan->deleteMessage(msg->id);
+        });
+
+    this->twitch.pubsub->signals_.moderation.automodInfoMessage.connect(
+        [&](const auto &action) {
+            auto chan =
+                this->twitch.server->getChannelOrEmptyByID(action.roomID);
+
+            if (chan->isEmpty())
+            {
+                return;
+            }
+
+            postToThread([chan, action] {
+                const auto p = makeAutomodInfoMessage(action);
+                chan->addMessage(p);
+            });
         });
 
     this->twitch.pubsub->signals_.pointReward.redeemed.connect([&](auto &data) {
@@ -364,6 +431,8 @@ void Application::initPubsub()
 Application *getApp()
 {
     assert(Application::instance != nullptr);
+
+    assertInGuiThread();
 
     return Application::instance;
 }
