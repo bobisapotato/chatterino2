@@ -1,17 +1,5 @@
 #include "singletons/WindowManager.hpp"
 
-#include <QDebug>
-#include <QDesktopWidget>
-#include <QJsonArray>
-#include <QJsonDocument>
-#include <QJsonObject>
-#include <QMessageBox>
-#include <QSaveFile>
-#include <QScreen>
-#include <boost/optional.hpp>
-#include <chrono>
-
-#include <QMessageBox>
 #include "Application.hpp"
 #include "common/Args.hpp"
 #include "common/QLogging.hpp"
@@ -21,27 +9,37 @@
 #include "providers/irc/IrcChannel2.hpp"
 #include "providers/irc/IrcServer.hpp"
 #include "providers/twitch/TwitchIrcServer.hpp"
-#include "singletons/Fonts.hpp"
 #include "singletons/Paths.hpp"
 #include "singletons/Settings.hpp"
 #include "singletons/Theme.hpp"
 #include "util/Clamp.hpp"
 #include "util/CombinePath.hpp"
 #include "widgets/AccountSwitchPopup.hpp"
-#include "widgets/FramelessEmbedWindow.hpp"
-#include "widgets/Notebook.hpp"
-#include "widgets/Window.hpp"
 #include "widgets/dialogs/SettingsDialog.hpp"
+#include "widgets/FramelessEmbedWindow.hpp"
 #include "widgets/helper/NotebookTab.hpp"
+#include "widgets/Notebook.hpp"
 #include "widgets/splits/Split.hpp"
 #include "widgets/splits/SplitContainer.hpp"
+#include "widgets/Window.hpp"
+
+#include <QDebug>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QMessageBox>
+#include <QSaveFile>
+#include <QScreen>
+
+#include <chrono>
+#include <optional>
 
 namespace chatterino {
 namespace {
 
-    boost::optional<bool> &shouldMoveOutOfBoundsWindow()
+    std::optional<bool> &shouldMoveOutOfBoundsWindow()
     {
-        static boost::optional<bool> x;
+        static std::optional<bool> x;
         return x;
     }
 
@@ -51,15 +49,14 @@ const QString WindowManager::WINDOW_LAYOUT_FILENAME(
     QStringLiteral("window-layout.json"));
 
 using SplitNode = SplitContainer::Node;
-using SplitDirection = SplitContainer::Direction;
 
 void WindowManager::showSettingsDialog(QWidget *parent,
                                        SettingsDialogPreference preference)
 {
-    if (getArgs().dontSaveSettings)
+    if (getApp()->getArgs().dontSaveSettings)
     {
         QMessageBox::critical(parent, "Chatterino - Editing Settings Forbidden",
-                              "Settings cannot be edited when running with "
+                              "Settings cannot be edited when running with\n"
                               "commandline arguments such as '-c'.");
     }
     else
@@ -88,19 +85,18 @@ void WindowManager::showAccountSelectPopup(QPoint point)
 
     w->refresh();
 
-    QPoint buttonPos = point;
-    w->move(buttonPos.x() - 30, buttonPos.y());
+    w->moveTo(point - QPoint(30, 0), widgets::BoundsChecking::CursorPosition);
     w->show();
     w->setFocus();
 }
 
-WindowManager::WindowManager()
-    : windowLayoutFilePath(combinePath(getPaths()->settingsDirectory,
+WindowManager::WindowManager(const Paths &paths)
+    : windowLayoutFilePath(combinePath(paths.settingsDirectory,
                                        WindowManager::WINDOW_LAYOUT_FILENAME))
 {
     qCDebug(chatterinoWindowmanager) << "init WindowManager";
 
-    auto settings = getSettings();
+    auto *settings = getSettings();
 
     this->wordFlagsListener_.addSetting(settings->showTimestamps);
     this->wordFlagsListener_.addSetting(settings->showBadgesGlobalAuthority);
@@ -110,9 +106,11 @@ WindowManager::WindowManager()
     this->wordFlagsListener_.addSetting(settings->showBadgesVanity);
     this->wordFlagsListener_.addSetting(settings->showBadgesChatterino);
     this->wordFlagsListener_.addSetting(settings->showBadgesFfz);
+    this->wordFlagsListener_.addSetting(settings->showBadgesSevenTV);
     this->wordFlagsListener_.addSetting(settings->enableEmoteImages);
     this->wordFlagsListener_.addSetting(settings->boldUsernames);
     this->wordFlagsListener_.addSetting(settings->lowercaseDomains);
+    this->wordFlagsListener_.addSetting(settings->showReplyButton);
     this->wordFlagsListener_.setCB([this] {
         this->updateWordTypeMask();
     });
@@ -122,13 +120,7 @@ WindowManager::WindowManager()
     this->saveTimer->setSingleShot(true);
 
     QObject::connect(this->saveTimer, &QTimer::timeout, [] {
-        getApp()->windows->save();
-    });
-
-    this->miscUpdateTimer_.start(100);
-
-    QObject::connect(&this->miscUpdateTimer_, &QTimer::timeout, [this] {
-        this->miscUpdate.invoke();
+        getIApp()->getWindows()->save();
     });
 }
 
@@ -142,7 +134,7 @@ MessageElementFlags WindowManager::getWordFlags()
 void WindowManager::updateWordTypeMask()
 {
     using MEF = MessageElementFlag;
-    auto settings = getSettings();
+    auto *settings = getSettings();
 
     // text
     auto flags = MessageElementFlags(MEF::Text);
@@ -178,17 +170,21 @@ void WindowManager::updateWordTypeMask()
     flags.set(settings->showBadgesChatterino ? MEF::BadgeChatterino
                                              : MEF::None);
     flags.set(settings->showBadgesFfz ? MEF::BadgeFfz : MEF::None);
+    flags.set(settings->showBadgesSevenTV ? MEF::BadgeSevenTV : MEF::None);
 
     // username
     flags.set(MEF::Username);
+
+    // replies
+    flags.set(MEF::RepliedMessage);
+    flags.set(settings->showReplyButton ? MEF::ReplyButton : MEF::None);
 
     // misc
     flags.set(MEF::AlwaysShow);
     flags.set(MEF::Collapsed);
     flags.set(settings->boldUsernames ? MEF::BoldUsername
                                       : MEF::NonBoldUsername);
-    flags.set(settings->lowercaseDomains ? MEF::LowercaseLink
-                                         : MEF::OriginalLink);
+    flags.set(MEF::LowercaseLinks, settings->lowercaseDomains);
     flags.set(MEF::ChannelPointReward);
 
     // update flags
@@ -211,6 +207,11 @@ void WindowManager::forceLayoutChannelViews()
 {
     this->incGeneration();
     this->layoutChannelViews(nullptr);
+}
+
+void WindowManager::invalidateChannelViewBuffers(Channel *channel)
+{
+    this->invalidateBuffersRequested.invoke(channel);
 }
 
 void WindowManager::repaintVisibleChatWidgets(Channel *channel)
@@ -237,18 +238,48 @@ Window &WindowManager::getMainWindow()
     return *this->mainWindow_;
 }
 
-Window &WindowManager::getSelectedWindow()
+Window *WindowManager::getLastSelectedWindow() const
 {
     assertInGuiThread();
+    if (this->selectedWindow_ == nullptr)
+    {
+        return this->mainWindow_;
+    }
 
-    return *this->selectedWindow_;
+    return this->selectedWindow_;
 }
 
-Window &WindowManager::createWindow(WindowType type, bool show)
+Window &WindowManager::createWindow(WindowType type, bool show, QWidget *parent)
 {
     assertInGuiThread();
 
-    auto *window = new Window(type);
+    auto *const realParent = [this, type, parent]() -> QWidget * {
+        if (parent)
+        {
+            // If a parent is explicitly specified, we use that immediately.
+            return parent;
+        }
+
+        // FIXME: On Windows, parenting popup windows causes unwanted behavior (see
+        //        https://github.com/Chatterino/chatterino2/issues/4179 for discussion). Ideally, we
+        //        would use a different solution rather than relying on OS-specific code but this is
+        //        the low-effort fix for now.
+#ifndef Q_OS_WIN
+        if (type == WindowType::Popup)
+        {
+            // On some window managers, popup windows require a parent to behave correctly. See
+            // https://github.com/Chatterino/chatterino2/pull/1843 for additional context.
+            return &(this->getMainWindow());
+        }
+#endif
+
+        // If no parent is set and something other than a popup window is being created, we fall
+        // back to the default behavior of no parent.
+        return nullptr;
+    }();
+
+    auto *window = new Window(type, realParent);
+
     this->windows_.push_back(window);
     if (show)
     {
@@ -275,6 +306,16 @@ Window &WindowManager::createWindow(WindowType type, bool show)
     return *window;
 }
 
+Window &WindowManager::openInPopup(ChannelPtr channel)
+{
+    auto &popup = this->createWindow(WindowType::Popup, true);
+    auto *split =
+        popup.getNotebook().getOrAddSelectedPage()->appendNewSplit(false);
+    split->setChannel(channel);
+
+    return popup;
+}
+
 void WindowManager::select(Split *split)
 {
     this->selectSplit.invoke(split);
@@ -283,6 +324,11 @@ void WindowManager::select(Split *split)
 void WindowManager::select(SplitContainer *container)
 {
     this->selectSplitContainer.invoke(container);
+}
+
+void WindowManager::scrollToMessage(const MessagePtr &message)
+{
+    this->scrollToMessageSignal.invoke(message);
 }
 
 QPoint WindowManager::emotePopupPos()
@@ -295,26 +341,37 @@ void WindowManager::setEmotePopupPos(QPoint pos)
     this->emotePopupPos_ = pos;
 }
 
-void WindowManager::initialize(Settings &settings, Paths &paths)
+void WindowManager::initialize(Settings &settings, const Paths &paths)
 {
+    (void)paths;
     assertInGuiThread();
 
-    getApp()->themes->repaintVisibleChatWidgets_.connect([this] {
-        this->repaintVisibleChatWidgets();
-    });
+    // We can safely ignore this signal connection since both Themes and WindowManager
+    // share the Application state lifetime
+    // NOTE: APPLICATION_LIFETIME
+    std::ignore =
+        getIApp()->getThemes()->repaintVisibleChatWidgets_.connect([this] {
+            this->repaintVisibleChatWidgets();
+        });
 
     assert(!this->initialized_);
 
     {
         WindowLayout windowLayout;
 
-        if (getArgs().customChannelLayout)
+        if (getApp()->getArgs().customChannelLayout)
         {
-            windowLayout = getArgs().customChannelLayout.value();
+            windowLayout = getApp()->getArgs().customChannelLayout.value();
         }
         else
         {
             windowLayout = this->loadWindowLayoutFromFile();
+        }
+
+        auto desired = getIApp()->getArgs().activateChannel;
+        if (desired)
+        {
+            windowLayout.activateOrAddChannel(desired->provider, desired->name);
         }
 
         this->emotePopupPos_ = windowLayout.emotePopupPos_;
@@ -322,7 +379,7 @@ void WindowManager::initialize(Settings &settings, Paths &paths)
         this->applyWindowLayout(windowLayout);
     }
 
-    if (getArgs().isFramelessEmbed)
+    if (getApp()->getArgs().isFramelessEmbed)
     {
         this->framelessEmbedWindow_.reset(new FramelessEmbedWindow);
         this->framelessEmbedWindow_->show();
@@ -335,7 +392,7 @@ void WindowManager::initialize(Settings &settings, Paths &paths)
         this->mainWindow_->getNotebook().addPage(true);
 
         // TODO: don't create main window if it's a frameless embed
-        if (getArgs().isFramelessEmbed)
+        if (getApp()->getArgs().isFramelessEmbed)
         {
             this->mainWindow_->hide();
         }
@@ -353,10 +410,10 @@ void WindowManager::initialize(Settings &settings, Paths &paths)
         this->forceLayoutChannelViews();
     });
     settings.alternateMessages.connect([this](auto, auto) {
-        this->forceLayoutChannelViews();
+        this->invalidateChannelViewBuffers();
     });
     settings.separateMessages.connect([this](auto, auto) {
-        this->forceLayoutChannelViews();
+        this->invalidateChannelViewBuffers();
     });
     settings.collpseMessagesMinLines.connect([this](auto, auto) {
         this->forceLayoutChannelViews();
@@ -370,11 +427,18 @@ void WindowManager::initialize(Settings &settings, Paths &paths)
 
 void WindowManager::save()
 {
-    if (getArgs().dontSaveSettings)
+    if (getApp()->getArgs().dontSaveSettings)
     {
         return;
     }
-    qCDebug(chatterinoWindowmanager) << "[WindowManager] Saving";
+
+    if (this->shuttingDown_)
+    {
+        qCDebug(chatterinoWindowmanager) << "Skipping save (shutting down)";
+        return;
+    }
+
+    qCDebug(chatterinoWindowmanager) << "Saving";
     assertInGuiThread();
     QJsonDocument document;
 
@@ -507,7 +571,7 @@ void WindowManager::encodeNodeRecursively(SplitNode *node, QJsonObject &obj)
 {
     switch (node->getType())
     {
-        case SplitNode::_Split: {
+        case SplitNode::Type::Split: {
             obj.insert("type", "split");
             obj.insert("moderationMode", node->getSplit()->getModerationMode());
 
@@ -521,11 +585,12 @@ void WindowManager::encodeNodeRecursively(SplitNode *node, QJsonObject &obj)
             obj.insert("filters", filters);
         }
         break;
-        case SplitNode::HorizontalContainer:
-        case SplitNode::VerticalContainer: {
-            obj.insert("type", node->getType() == SplitNode::HorizontalContainer
-                                   ? "horizontal"
-                                   : "vertical");
+        case SplitNode::Type::HorizontalContainer:
+        case SplitNode::Type::VerticalContainer: {
+            obj.insert("type",
+                       node->getType() == SplitNode::Type::HorizontalContainer
+                           ? "horizontal"
+                           : "vertical");
 
             QJsonArray itemsArr;
             for (const std::unique_ptr<SplitNode> &n : node->getChildren())
@@ -554,6 +619,10 @@ void WindowManager::encodeChannel(IndirectChannel channel, QJsonObject &obj)
             obj.insert("name", channel.get()->getName());
         }
         break;
+        case Channel::Type::TwitchAutomod: {
+            obj.insert("type", "automod");
+        }
+        break;
         case Channel::Type::TwitchMentions: {
             obj.insert("type", "mentions");
         }
@@ -571,7 +640,7 @@ void WindowManager::encodeChannel(IndirectChannel channel, QJsonObject &obj)
         }
         break;
         case Channel::Type::Irc: {
-            if (auto ircChannel =
+            if (auto *ircChannel =
                     dynamic_cast<IrcChannel *>(channel.get().get()))
             {
                 obj.insert("type", "irc");
@@ -583,6 +652,10 @@ void WindowManager::encodeChannel(IndirectChannel channel, QJsonObject &obj)
             }
         }
         break;
+        case Channel::Type::Misc: {
+            obj.insert("type", "misc");
+            obj.insert("name", channel.get()->getName());
+        }
     }
 }
 
@@ -601,32 +674,40 @@ IndirectChannel WindowManager::decodeChannel(const SplitDescriptor &descriptor)
 {
     assertInGuiThread();
 
-    auto app = getApp();
+    auto *app = getApp();
 
     if (descriptor.type_ == "twitch")
     {
-        return app->twitch.server->getOrAddChannel(descriptor.channelName_);
+        return app->twitch->getOrAddChannel(descriptor.channelName_);
     }
     else if (descriptor.type_ == "mentions")
     {
-        return app->twitch.server->mentionsChannel;
+        return app->twitch->mentionsChannel;
     }
     else if (descriptor.type_ == "watching")
     {
-        return app->twitch.server->watchingChannel;
+        return app->twitch->watchingChannel;
     }
     else if (descriptor.type_ == "whispers")
     {
-        return app->twitch.server->whispersChannel;
+        return app->twitch->whispersChannel;
     }
     else if (descriptor.type_ == "live")
     {
-        return app->twitch.server->liveChannel;
+        return app->twitch->liveChannel;
+    }
+    else if (descriptor.type_ == "automod")
+    {
+        return app->twitch->automodChannel;
     }
     else if (descriptor.type_ == "irc")
     {
         return Irc::instance().getOrAddChannel(descriptor.server_,
                                                descriptor.channelName_);
+    }
+    else if (descriptor.type_ == "misc")
+    {
+        return app->twitch->getChannelOrEmpty(descriptor.channelName_);
     }
 
     return Channel::getEmpty();
@@ -635,6 +716,9 @@ IndirectChannel WindowManager::decodeChannel(const SplitDescriptor &descriptor)
 void WindowManager::closeAll()
 {
     assertInGuiThread();
+
+    qCDebug(chatterinoWindowmanager) << "Shutting down (closing windows)";
+    this->shuttingDown_ = true;
 
     for (Window *window : windows_)
     {
@@ -659,7 +743,7 @@ WindowLayout WindowManager::loadWindowLayoutFromFile() const
 
 void WindowManager::applyWindowLayout(const WindowLayout &layout)
 {
-    if (getArgs().dontLoadMainWindow)
+    if (getApp()->getArgs().dontLoadMainWindow)
     {
         return;
     }
@@ -685,7 +769,7 @@ void WindowManager::applyWindowLayout(const WindowLayout &layout)
             // out of bounds windows
             auto screens = qApp->screens();
             bool outOfBounds =
-                !getenv("I3SOCK") &&
+                !qEnvironmentVariableIsSet("I3SOCK") &&
                 std::none_of(screens.begin(), screens.end(),
                              [&](QScreen *screen) {
                                  return screen->availableGeometry().intersects(

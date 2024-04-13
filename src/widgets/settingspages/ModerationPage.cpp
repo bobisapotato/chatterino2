@@ -1,44 +1,37 @@
 #include "ModerationPage.hpp"
 
 #include "Application.hpp"
+#include "controllers/logging/ChannelLoggingModel.hpp"
+#include "controllers/moderationactions/ModerationAction.hpp"
 #include "controllers/moderationactions/ModerationActionModel.hpp"
 #include "singletons/Logging.hpp"
 #include "singletons/Paths.hpp"
+#include "singletons/Settings.hpp"
 #include "util/Helpers.hpp"
 #include "util/LayoutCreator.hpp"
 #include "widgets/helper/EditableModelView.hpp"
 
 #include <QFileDialog>
-#include <QFormLayout>
-#include <QGroupBox>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QLabel>
-#include <QListView>
 #include <QPushButton>
 #include <QTableView>
-#include <QTextEdit>
-#include <QVBoxLayout>
 #include <QtConcurrent/QtConcurrent>
 
 namespace chatterino {
 
-qint64 dirSize(QString dirPath)
+qint64 dirSize(QString &dirPath)
 {
+    QDirIterator it(dirPath, QDirIterator::Subdirectories);
     qint64 size = 0;
-    QDir dir(dirPath);
-    // calculate total size of current directories' files
-    QDir::Filters fileFilters = QDir::Files | QDir::System | QDir::Hidden;
-    for (QString filePath : dir.entryList(fileFilters))
+
+    while (it.hasNext())
     {
-        QFileInfo fi(dir, filePath);
-        size += fi.size();
+        size += it.fileInfo().size();
+        it.next();
     }
-    // add size of child directories recursively
-    QDir::Filters dirFilters =
-        QDir::Dirs | QDir::NoDotAndDotDot | QDir::System | QDir::Hidden;
-    for (QString childDirPath : dir.entryList(dirFilters))
-        size += dirSize(dirPath + QDir::separator() + childDirPath);
+
     return size;
 }
 
@@ -50,7 +43,9 @@ QString formatSize(qint64 size)
     for (i = 0; i < units.size() - 1; i++)
     {
         if (outputSize < 1024)
+        {
             break;
+        }
         outputSize = outputSize / 1024;
     }
     return QString("%0 %1").arg(outputSize, 0, 'f', 2).arg(units[i]);
@@ -58,20 +53,18 @@ QString formatSize(qint64 size)
 
 QString fetchLogDirectorySize()
 {
-    QString logPathDirectory = getSettings()->logPath.getValue().isEmpty()
-                                   ? getPaths()->messageLogDirectory
-                                   : getSettings()->logPath;
+    QString logsDirectoryPath = getSettings()->logPath.getValue().isEmpty()
+                                    ? getIApp()->getPaths().messageLogDirectory
+                                    : getSettings()->logPath;
 
-    qint64 logsSize = dirSize(logPathDirectory);
-    QString logsSizeLabel = "Your logs currently take up ";
-    logsSizeLabel += formatSize(logsSize);
-    logsSizeLabel += " of space";
-    return logsSizeLabel;
+    auto logsSize = dirSize(logsDirectoryPath);
+
+    return QString("Your logs currently take up %1 of space")
+        .arg(formatSize(logsSize));
 }
 
 ModerationPage::ModerationPage()
 {
-    auto app = getApp();
     LayoutCreator<ModerationPage> layoutCreator(this);
 
     auto tabs = layoutCreator.emplace<QTabWidget>();
@@ -79,15 +72,18 @@ ModerationPage::ModerationPage()
 
     auto logs = tabs.appendTab(new QVBoxLayout, "Logs");
     {
-        logs.append(this->createCheckBox("Enable logging",
-                                         getSettings()->enableLogging));
+        QCheckBox *enableLogging = this->createCheckBox(
+            "Enable logging", getSettings()->enableLogging);
+        logs.append(enableLogging);
+
         auto logsPathLabel = logs.emplace<QLabel>();
 
         // Logs (copied from LoggingMananger)
         getSettings()->logPath.connect([logsPathLabel](const QString &logPath,
                                                        auto) mutable {
             QString pathOriginal =
-                logPath.isEmpty() ? getPaths()->messageLogDirectory : logPath;
+                logPath.isEmpty() ? getIApp()->getPaths().messageLogDirectory
+                                  : logPath;
 
             QString pathShortened =
                 "Logs are saved at <a href=\"file:///" + pathOriginal +
@@ -115,40 +111,71 @@ ModerationPage::ModerationPage()
             });
 
         buttons->addStretch();
-        logs->addStretch(1);
 
         // Show how big (size-wise) the logs are
         auto logsPathSizeLabel = logs.emplace<QLabel>();
         logsPathSizeLabel->setText(QtConcurrent::run([] {
-            return fetchLogDirectorySize();
-        }));
+                                       return fetchLogDirectorySize();
+                                   }).result());
 
         // Select event
-        QObject::connect(selectDir.getElement(), &QPushButton::clicked, this,
-                         [this, logsPathSizeLabel]() mutable {
-                             auto dirName =
-                                 QFileDialog::getExistingDirectory(this);
+        QObject::connect(
+            selectDir.getElement(), &QPushButton::clicked, this,
+            [this, logsPathSizeLabel]() mutable {
+                auto dirName = QFileDialog::getExistingDirectory(this);
 
-                             getSettings()->logPath = dirName;
+                getSettings()->logPath = dirName;
 
-                             // Refresh: Show how big (size-wise) the logs are
-                             logsPathSizeLabel->setText(QtConcurrent::run([] {
-                                 return fetchLogDirectorySize();
-                             }));
-                         });
+                // Refresh: Show how big (size-wise) the logs are
+                logsPathSizeLabel->setText(QtConcurrent::run([] {
+                                               return fetchLogDirectorySize();
+                                           }).result());
+            });
 
         buttons->addSpacing(16);
 
         // Reset custom logpath
-        QObject::connect(resetDir.getElement(), &QPushButton::clicked, this,
-                         [logsPathSizeLabel]() mutable {
-                             getSettings()->logPath = "";
+        QObject::connect(
+            resetDir.getElement(), &QPushButton::clicked, this,
+            [logsPathSizeLabel]() mutable {
+                getSettings()->logPath = "";
 
-                             // Refresh: Show how big (size-wise) the logs are
-                             logsPathSizeLabel->setText(QtConcurrent::run([] {
-                                 return fetchLogDirectorySize();
-                             }));
-                         });
+                // Refresh: Show how big (size-wise) the logs are
+                logsPathSizeLabel->setText(QtConcurrent::run([] {
+                                               return fetchLogDirectorySize();
+                                           }).result());
+            });
+
+        QCheckBox *onlyLogListedChannels =
+            this->createCheckBox("Only log channels listed below",
+                                 getSettings()->onlyLogListedChannels);
+
+        onlyLogListedChannels->setEnabled(getSettings()->enableLogging);
+        logs.append(onlyLogListedChannels);
+
+        // Select event
+        QObject::connect(
+            enableLogging, &QCheckBox::stateChanged, this,
+            [enableLogging, onlyLogListedChannels]() mutable {
+                onlyLogListedChannels->setEnabled(enableLogging->isChecked());
+            });
+
+        EditableModelView *view =
+            logs.emplace<EditableModelView>(
+                    (new ChannelLoggingModel(nullptr))
+                        ->initialized(&getSettings()->loggedChannels))
+                .getElement();
+
+        view->setTitles({"Twitch channels"});
+        view->getTableView()->horizontalHeader()->setSectionResizeMode(
+            QHeaderView::Fixed);
+        view->getTableView()->horizontalHeader()->setSectionResizeMode(
+            0, QHeaderView::Stretch);
+
+        // We can safely ignore this signal connection since we own the view
+        std::ignore = view->addButtonPressed.connect([] {
+            getSettings()->loggedChannels.append(ChannelLog("channel"));
+        });
 
     }  // logs end
 
@@ -186,7 +213,8 @@ ModerationPage::ModerationPage()
         view->getTableView()->horizontalHeader()->setSectionResizeMode(
             0, QHeaderView::Stretch);
 
-        view->addButtonPressed.connect([] {
+        // We can safely ignore this signal connection since we own the view
+        std::ignore = view->addButtonPressed.connect([] {
             getSettings()->moderationActions.append(
                 ModerationAction("/timeout {user.name} 300"));
         });
@@ -220,10 +248,10 @@ void ModerationPage::addModerationButtonSettings(
     texts->setContentsMargins(0, 0, 0, 15);
     texts->setSizeConstraint(QLayout::SetMaximumSize);
 
-    const auto valueChanged = [=] {
+    const auto valueChanged = [=, this] {
         const auto index = QObject::sender()->objectName().toInt();
 
-        const auto line = this->durationInputs_[index];
+        auto *const line = this->durationInputs_[index];
         const auto duration = line->text().toInt();
         const auto unit = this->unitInputs_[index]->currentText();
 
@@ -246,7 +274,7 @@ void ModerationPage::addModerationButtonSettings(
 
     // build one line for each customizable button
     auto i = 0;
-    for (const auto tButton : getSettings()->timeoutButtons.getValue())
+    for (const auto &tButton : getSettings()->timeoutButtons.getValue())
     {
         const auto buttonNumber = QString::number(i);
         auto timeout = timeoutLayout.emplace<QHBoxLayout>().withoutMargin();

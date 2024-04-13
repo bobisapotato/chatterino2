@@ -16,7 +16,7 @@ IrcConnection::IrcConnection(QObject *parent)
 {
     // Log connection errors for ease-of-debugging
     QObject::connect(this, &Communi::IrcConnection::socketError, this,
-                     [this](QAbstractSocket::SocketError error) {
+                     [](QAbstractSocket::SocketError error) {
                          qCDebug(chatterinoIrc) << "Connection error:" << error;
                      });
 
@@ -37,18 +37,6 @@ IrcConnection::IrcConnection(QObject *parent)
                 }
             }
         });
-
-    // Schedule a reconnect that won't violate RECONNECT_MIN_INTERVAL
-    this->smartReconnect.connect([this] {
-        if (this->reconnectTimer_.isActive())
-        {
-            return;
-        }
-
-        auto delay = this->reconnectBackoff_.next();
-        qCDebug(chatterinoIrc) << "Reconnecting in" << delay.count() << "ms";
-        this->reconnectTimer_.start(delay);
-    });
 
     this->reconnectTimer_.setSingleShot(true);
     QObject::connect(&this->reconnectTimer_, &QTimer::timeout, [this] {
@@ -76,6 +64,7 @@ IrcConnection::IrcConnection(QObject *parent)
                 // If we're still receiving messages, all is well
                 this->recentlyReceivedMessage_ = false;
                 this->waitingForPong_ = false;
+                this->heartbeat.invoke();
                 return;
             }
 
@@ -108,10 +97,32 @@ IrcConnection::IrcConnection(QObject *parent)
 
     QObject::connect(this, &Communi::IrcConnection::messageReceived,
                      [this](Communi::IrcMessage *message) {
-                         // This connection is probably still alive
                          this->recentlyReceivedMessage_ = true;
-                         this->reconnectBackoff_.reset();
+
+                         if (message->command() == "372")  // MOTD
+                         {
+                             this->reconnectBackoff_.reset();
+                         }
                      });
+}
+
+IrcConnection::~IrcConnection()
+{
+    // Prematurely disconnect all QObject connections
+    this->disconnect();
+}
+
+void IrcConnection::smartReconnect()
+{
+    if (this->reconnectTimer_.isActive())
+    {
+        // Ignore this reconnect request, we already have a reconnect request queued up
+        return;
+    }
+
+    auto delay = this->reconnectBackoff_.next();
+    qCDebug(chatterinoIrc) << "Reconnecting in" << delay.count() << "ms";
+    this->reconnectTimer_.start(delay);
 }
 
 void IrcConnection::open()

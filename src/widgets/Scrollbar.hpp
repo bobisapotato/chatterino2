@@ -4,10 +4,10 @@
 #include "widgets/BaseWidget.hpp"
 #include "widgets/helper/ScrollbarHighlight.hpp"
 
+#include <pajlada/signals/signal.hpp>
 #include <QMutex>
 #include <QPropertyAnimation>
 #include <QWidget>
-#include <pajlada/signals/signal.hpp>
 
 namespace chatterino {
 
@@ -18,7 +18,7 @@ class Scrollbar : public BaseWidget
     Q_OBJECT
 
 public:
-    Scrollbar(ChannelView *parent = nullptr);
+    Scrollbar(size_t messagesLimit, ChannelView *parent = nullptr);
 
     void addHighlight(ScrollbarHighlight highlight);
     void addHighlightsAtStart(
@@ -30,21 +30,25 @@ public:
     void clearHighlights();
 
     void scrollToBottom(bool animate = false);
+    void scrollToTop(bool animate = false);
     bool isAtBottom() const;
 
     void setMaximum(qreal value);
+    void offsetMaximum(qreal value);
+    void resetMaximum();
     void setMinimum(qreal value);
+    void offsetMinimum(qreal value);
     void setLargeChange(qreal value);
     void setSmallChange(qreal value);
     void setDesiredValue(qreal value, bool animated = false);
     qreal getMaximum() const;
     qreal getMinimum() const;
     qreal getLargeChange() const;
+    qreal getBottom() const;
     qreal getSmallChange() const;
     qreal getDesiredValue() const;
     qreal getCurrentValue() const;
-
-    const QPropertyAnimation &getCurrentValueAnimation() const;
+    qreal getRelativeCurrentValue() const;
 
     // offset the desired value without breaking smooth scolling
     void offset(qreal value);
@@ -67,7 +71,7 @@ protected:
 private:
     Q_PROPERTY(qreal currentValue_ READ getCurrentValue WRITE setCurrentValue)
 
-    LimitedQueueSnapshot<ScrollbarHighlight> getHighlightSnapshot();
+    LimitedQueueSnapshot<ScrollbarHighlight> &getHighlightSnapshot();
     void updateScroll();
 
     QMutex mutex_;
@@ -95,7 +99,6 @@ private:
     qreal smallChange_ = 5;
     qreal desiredValue_ = 0;
     qreal currentValue_ = 0;
-    qreal smoothScrollingOffset_ = 0;
 
     pajlada::Signals::NoArgSignal currentValueChanged_;
     pajlada::Signals::NoArgSignal desiredValueChanged_;

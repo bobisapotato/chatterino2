@@ -1,13 +1,11 @@
 #include "providers/irc/IrcMessageBuilder.hpp"
 
-#include "Application.hpp"
-#include "controllers/accounts/AccountController.hpp"
 #include "controllers/ignores/IgnoreController.hpp"
 #include "controllers/ignores/IgnorePhrase.hpp"
 #include "messages/Message.hpp"
-#include "providers/chatterino/ChatterinoBadges.hpp"
+#include "messages/MessageColor.hpp"
+#include "messages/MessageElement.hpp"
 #include "singletons/Emotes.hpp"
-#include "singletons/Resources.hpp"
 #include "singletons/Settings.hpp"
 #include "singletons/Theme.hpp"
 #include "singletons/WindowManager.hpp"
@@ -33,6 +31,22 @@ IrcMessageBuilder::IrcMessageBuilder(Channel *_channel,
     assert(false);
 }
 
+IrcMessageBuilder::IrcMessageBuilder(
+    const Communi::IrcNoticeMessage *_ircMessage, const MessageParseArgs &_args)
+    : SharedMessageBuilder(Channel::getEmpty().get(), _ircMessage, _args,
+                           _ircMessage->content(), false)
+{
+}
+
+IrcMessageBuilder::IrcMessageBuilder(
+    const Communi::IrcPrivateMessage *_ircMessage,
+    const MessageParseArgs &_args)
+    : SharedMessageBuilder(Channel::getEmpty().get(), _ircMessage, _args,
+                           _ircMessage->content(), false)
+    , whisperTarget_(_ircMessage->target())
+{
+}
+
 MessagePtr IrcMessageBuilder::build()
 {
     // PARSE
@@ -42,16 +56,19 @@ MessagePtr IrcMessageBuilder::build()
     // PUSH ELEMENTS
     this->appendChannelName();
 
-    this->emplace<TimestampElement>(
-        calculateMessageTimestamp(this->ircMessage));
+    this->message().serverReceivedTime = calculateMessageTime(this->ircMessage);
+    this->emplace<TimestampElement>(this->message().serverReceivedTime.time());
 
     this->appendUsername();
 
-    // words
-    this->addWords(this->originalMessage_.split(' '));
+    // message
+    this->addIrcMessageText(this->originalMessage_);
 
-    this->message().messageText = this->originalMessage_;
-    this->message().searchText = this->message().localizedName + " " +
+    QString stylizedUsername =
+        this->stylizeUsername(this->userName, this->message());
+
+    this->message().searchText = stylizedUsername + " " +
+                                 this->message().localizedName + " " +
                                  this->userName + ": " + this->originalMessage_;
 
     // highlights
@@ -66,11 +83,6 @@ MessagePtr IrcMessageBuilder::build()
     return this->release();
 }
 
-void IrcMessageBuilder::addWords(const QStringList &words)
-{
-    this->emplace<IrcTextElement>(words.join(' '), MessageElementFlag::Text);
-}
-
 void IrcMessageBuilder::appendUsername()
 {
     QString username = this->userName;
@@ -78,16 +90,58 @@ void IrcMessageBuilder::appendUsername()
     this->message().displayName = username;
 
     // The full string that will be rendered in the chat widget
-    QString usernameText = username;
+    QString usernameText =
+        SharedMessageBuilder::stylizeUsername(username, this->message());
 
-    if (!this->action_)
+    if (this->args.isReceivedWhisper)
     {
-        usernameText += ":";
-    }
+        this->emplace<TextElement>(usernameText, MessageElementFlag::Username,
+                                   this->usernameColor_,
+                                   FontStyle::ChatMediumBold)
+            ->setLink({Link::UserWhisper, this->message().displayName});
 
-    this->emplace<TextElement>(usernameText, MessageElementFlag::Username,
-                               this->usernameColor_, FontStyle::ChatMediumBold)
-        ->setLink({Link::UserInfo, this->message().loginName});
+        // Separator
+        this->emplace<TextElement>("->", MessageElementFlag::Username,
+                                   MessageColor::System, FontStyle::ChatMedium);
+
+        if (this->whisperTarget_.isEmpty())
+        {
+            this->emplace<TextElement>("you:", MessageElementFlag::Username);
+        }
+        else
+        {
+            this->emplace<TextElement>(this->whisperTarget_ + ":",
+                                       MessageElementFlag::Username,
+                                       getRandomColor(this->whisperTarget_),
+                                       FontStyle::ChatMediumBold);
+        }
+    }
+    else if (this->args.isSentWhisper)
+    {
+        this->emplace<TextElement>(usernameText, MessageElementFlag::Username,
+                                   this->usernameColor_,
+                                   FontStyle::ChatMediumBold);
+
+        // Separator
+        this->emplace<TextElement>("->", MessageElementFlag::Username,
+                                   MessageColor::System, FontStyle::ChatMedium);
+
+        this->emplace<TextElement>(
+                this->whisperTarget_ + ":", MessageElementFlag::Username,
+                getRandomColor(this->whisperTarget_), FontStyle::ChatMediumBold)
+            ->setLink({Link::UserWhisper, this->whisperTarget_});
+    }
+    else
+    {
+        if (!this->action_)
+        {
+            usernameText += ":";
+        }
+        this->emplace<TextElement>(usernameText, MessageElementFlag::Username,
+                                   this->usernameColor_,
+                                   FontStyle::ChatMediumBold)
+            ->setLink({Link::UserInfo, this->message().loginName});
+    }
 }
 
 }  // namespace chatterino

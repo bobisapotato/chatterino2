@@ -1,7 +1,8 @@
 #pragma once
 
-#include <QCoreApplication>
+#include "debug/AssertInGuiThread.hpp"
 
+#include <QCoreApplication>
 #include <QRunnable>
 #include <QThreadPool>
 
@@ -16,11 +17,11 @@ class LambdaRunnable : public QRunnable
 {
 public:
     LambdaRunnable(std::function<void()> action)
+        : action_(std::move(action))
     {
-        this->action_ = std::move(action);
     }
 
-    void run()
+    void run() override
     {
         this->action_();
     }
@@ -54,6 +55,19 @@ static void postToThread(F &&fun, QObject *obj = qApp)
         }
     };
     QCoreApplication::postEvent(obj, new Event(std::forward<F>(fun)));
+}
+
+template <typename F>
+static void runInGuiThread(F &&fun)
+{
+    if (isGuiThread())
+    {
+        fun();
+    }
+    else
+    {
+        postToThread(fun);
+    }
 }
 
 }  // namespace chatterino

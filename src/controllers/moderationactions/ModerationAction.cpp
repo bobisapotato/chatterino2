@@ -1,9 +1,11 @@
-#include "ModerationAction.hpp"
+#include "controllers/moderationactions/ModerationAction.hpp"
 
-#include <QRegularExpression>
 #include "Application.hpp"
+#include "debug/AssertInGuiThread.hpp"
 #include "messages/Image.hpp"
 #include "singletons/Resources.hpp"
+
+#include <QRegularExpression>
 
 namespace chatterino {
 
@@ -134,16 +136,22 @@ bool ModerationAction::isImage() const
     return bool(this->image_);
 }
 
-const boost::optional<ImagePtr> &ModerationAction::getImage() const
+const std::optional<ImagePtr> &ModerationAction::getImage() const
 {
     assertInGuiThread();
 
     if (this->imageToLoad_ != 0)
     {
         if (this->imageToLoad_ == 1)
-            this->image_ = Image::fromPixmap(getResources().buttons.ban);
+        {
+            this->image_ =
+                Image::fromResourcePixmap(getResources().buttons.ban);
+        }
         else if (this->imageToLoad_ == 2)
-            this->image_ = Image::fromPixmap(getResources().buttons.trashCan);
+        {
+            this->image_ =
+                Image::fromResourcePixmap(getResources().buttons.trashCan);
+        }
     }
 
     return this->image_;

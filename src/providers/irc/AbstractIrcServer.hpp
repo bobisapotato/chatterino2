@@ -1,29 +1,35 @@
 #pragma once
 
-#include <IrcMessage>
-#include <functional>
-#include <mutex>
-#include <pajlada/signals/signal.hpp>
-#include <pajlada/signals/signalholder.hpp>
-
 #include "common/Common.hpp"
 #include "providers/irc/IrcConnection2.hpp"
 #include "util/RatelimitBucket.hpp"
+
+#include <IrcMessage>
+#include <pajlada/signals/signal.hpp>
+#include <pajlada/signals/signalholder.hpp>
+
+#include <functional>
+#include <mutex>
 
 namespace chatterino {
 
 class Channel;
 using ChannelPtr = std::shared_ptr<Channel>;
+class RatelimitBucket;
 
 class AbstractIrcServer : public QObject
 {
 public:
     enum ConnectionType { Read = 1, Write = 2, Both = 3 };
 
-    virtual ~AbstractIrcServer() = default;
+    ~AbstractIrcServer() override = default;
+    AbstractIrcServer(const AbstractIrcServer &) = delete;
+    AbstractIrcServer(AbstractIrcServer &&) = delete;
+    AbstractIrcServer &operator=(const AbstractIrcServer &) = delete;
+    AbstractIrcServer &operator=(AbstractIrcServer &&) = delete;
 
     // initializeIrc must be called from the derived class
-    // this allows us to initialize the abstract irc server based on the derived class's parameters
+    // this allows us to initialize the abstract IRC server based on the derived class's parameters
     void initializeIrc();
 
     // connection
@@ -31,7 +37,7 @@ public:
     void disconnect();
 
     void sendMessage(const QString &channelName, const QString &message);
-    void sendRawMessage(const QString &rawMessage);
+    virtual void sendRawMessage(const QString &rawMessage);
 
     // channels
     ChannelPtr getOrAddChannel(const QString &dirtyChannelName);
@@ -55,9 +61,13 @@ protected:
     // initializeConnectionSignals is called on a connection once in its lifetime.
     // it can be used to connect signals to your class
     virtual void initializeConnectionSignals(IrcConnection *connection,
-                                             ConnectionType type){};
+                                             ConnectionType type)
+    {
+        (void)connection;
+        (void)type;
+    }
 
-    // initializeConnection is called every time before we try to connect to the irc server
+    // initializeConnection is called every time before we try to connect to the IRC server
     virtual void initializeConnection(IrcConnection *connection,
                                       ConnectionType type) = 0;
 
@@ -71,6 +81,7 @@ protected:
     virtual void onReadConnected(IrcConnection *connection);
     virtual void onWriteConnected(IrcConnection *connection);
     virtual void onDisconnected();
+    void markChannelsConnected();
 
     virtual std::shared_ptr<Channel> getCustomChannel(
         const QString &channelName);
