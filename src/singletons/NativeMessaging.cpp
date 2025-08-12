@@ -7,16 +7,19 @@
 #include "debug/AssertInGuiThread.hpp"
 #include "providers/twitch/TwitchIrcServer.hpp"
 #include "singletons/Paths.hpp"
+#include "singletons/Settings.hpp"
 #include "util/IpcQueue.hpp"
 #include "util/PostToThread.hpp"
 
 #include <QCoreApplication>
+#include <QDir>
 #include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonValue>
 #include <QSettings>
+#include <QStringBuilder>
 
 #ifdef Q_OS_WIN
 #    include "widgets/AttachedWindow.hpp"
@@ -24,20 +27,106 @@
 
 namespace {
 
+using namespace chatterino::nm::detail;
+using namespace chatterino;
 using namespace chatterino::literals;
 
 const QString EXTENSION_ID = u"glknmaideaikkmemifbfkhnomoknepka"_s;
 constexpr const size_t MESSAGE_SIZE = 1024;
 
+struct Config {
+#ifdef Q_OS_WIN
+    QString fileName;
+    QString registryKey;
+#else
+    QString browserDirectory;
+    QString nmDirectory;
+#endif
+};
+
+const Config FIREFOX{
+#ifdef Q_OS_WIN
+    .fileName = u"native-messaging-manifest-firefox.json"_s,
+    .registryKey =
+        u"HKCU\\Software\\Mozilla\\NativeMessagingHosts\\com.chatterino.chatterino"_s,
+#elif defined(Q_OS_MACOS)
+    .browserDirectory = u"~/Library/Application Support/Mozilla"_s,
+    .nmDirectory = u"NativeMessagingHosts"_s,
+#else
+    .browserDirectory = u"~/.mozilla"_s,
+    .nmDirectory = u"native-messaging-hosts"_s,
+#endif
+};
+
+const Config CHROME{
+#ifdef Q_OS_WIN
+    .fileName = u"native-messaging-manifest-chrome.json"_s,
+    .registryKey =
+        u"HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\com.chatterino.chatterino"_s,
+#elif defined(Q_OS_MACOS)
+    .browserDirectory = u"~/Library/Application Support/Google/Chrome/"_s,
+    .nmDirectory = u"NativeMessagingHosts"_s,
+#else
+    .browserDirectory = u"~/.config/google-chrome"_s,
+    .nmDirectory = u"NativeMessagingHosts"_s,
+#endif
+};
+
+void registerNmManifest([[maybe_unused]] const Paths &paths,
+                        const Config &config, const QJsonDocument &document)
+{
+#ifdef Q_OS_WIN
+    writeManifestTo(paths.miscDirectory, u"."_s, config.fileName, document);
+
+    QSettings registry(config.registryKey, QSettings::NativeFormat);
+    registry.setValue("Default",
+                      QString(paths.miscDirectory % u'/' % config.fileName));
+#else
+    writeManifestTo(config.browserDirectory, config.nmDirectory,
+                    u"com.chatterino.chatterino.json"_s, document);
+#endif
+}
+
 }  // namespace
+
+namespace chatterino::nm::detail {
+
+nonstd::expected<void, WriteManifestError> writeManifestTo(
+    QString directory, const QString &nmDirectory, const QString &filename,
+    const QJsonDocument &json)
+{
+    if (directory.startsWith('~'))
+    {
+        directory = QDir::homePath() % QStringView{directory}.sliced(1);
+    }
+
+    QDir dir(directory);
+    if (!dir.exists(nmDirectory) && !dir.mkdir(nmDirectory))
+    {
+        qCWarning(chatterinoNativeMessage)
+            << "Failed to create" << nmDirectory << "in" << directory;
+        return makeUnexpected(WriteManifestError::FailedToCreateDirectory);
+    }
+    dir.cd(nmDirectory);
+
+    QFile file(dir.filePath(filename));
+    if (!file.open(QFile::WriteOnly | QFile::Truncate))
+    {
+        qCWarning(chatterinoNativeMessage)
+            << "Failed to open" << filename << "in" << directory;
+        return makeUnexpected(WriteManifestError::FailedToCreateFile);
+    }
+    file.write(json.toJson());
+
+    return {};
+}
+
+}  // namespace chatterino::nm::detail
 
 namespace chatterino {
 
+using namespace chatterino::nm::detail;
 using namespace literals;
-
-void registerNmManifest(const Paths &paths, const QString &manifestFilename,
-                        const QString &registryKeyName,
-                        const QJsonDocument &document);
 
 void registerNmHost(const Paths &paths)
 {
@@ -55,49 +144,49 @@ void registerNmHost(const Paths &paths)
         };
     };
 
+    QStringList extensionIDs =
+        getSettings()->additionalExtensionIDs.getValue().split(
+            ';', Qt::SkipEmptyParts);
+
     // chrome
     {
         auto obj = getBaseDocument();
         QJsonArray allowedOriginsArr = {
             u"chrome-extension://%1/"_s.arg(EXTENSION_ID)};
+
+        for (const auto &id : extensionIDs)
+        {
+            QString trimmedID = id.trimmed();
+            if (!trimmedID.isEmpty())
+            {
+                allowedOriginsArr.append(
+                    u"chrome-extension://%1/"_s.arg(trimmedID));
+            }
+        }
+
         obj.insert("allowed_origins", allowedOriginsArr);
 
-        registerNmManifest(paths, "/native-messaging-manifest-chrome.json",
-                           "HKCU\\Software\\Google\\Chrome\\NativeMessagingHost"
-                           "s\\com.chatterino.chatterino",
-                           QJsonDocument(obj));
+        registerNmManifest(paths, CHROME, QJsonDocument{obj});
     }
 
     // firefox
     {
         auto obj = getBaseDocument();
         QJsonArray allowedExtensions = {"chatterino_native@chatterino.com"};
+
+        for (const auto &id : extensionIDs)
+        {
+            QString trimmedID = id.trimmed();
+            if (!trimmedID.isEmpty())
+            {
+                allowedExtensions.append(trimmedID);
+            }
+        }
+
         obj.insert("allowed_extensions", allowedExtensions);
 
-        registerNmManifest(paths, "/native-messaging-manifest-firefox.json",
-                           "HKCU\\Software\\Mozilla\\NativeMessagingHosts\\com."
-                           "chatterino.chatterino",
-                           QJsonDocument(obj));
+        registerNmManifest(paths, FIREFOX, QJsonDocument{obj});
     }
-}
-
-void registerNmManifest(const Paths &paths, const QString &manifestFilename,
-                        const QString &registryKeyName,
-                        const QJsonDocument &document)
-{
-    (void)registryKeyName;
-
-    // save the manifest
-    QString manifestPath = paths.miscDirectory + manifestFilename;
-    QFile file(manifestPath);
-    file.open(QIODevice::WriteOnly | QIODevice::Truncate);
-    file.write(document.toJson());
-    file.flush();
-
-#ifdef Q_OS_WIN
-    QSettings registry(registryKeyName, QSettings::NativeFormat);
-    registry.setValue("Default", manifestPath);
-#endif
 }
 
 std::string &getNmQueueName(const Paths &paths)
@@ -111,34 +200,56 @@ std::string &getNmQueueName(const Paths &paths)
 
 namespace nm::client {
 
-    void sendMessage(const QByteArray &array)
-    {
-        ipc::sendMessage("chatterino_gui", array);
-    }
+void sendMessage(const QByteArray &array)
+{
+    ipc::sendMessage("chatterino_gui", array);
+}
 
-    void writeToCout(const QByteArray &array)
-    {
-        const auto *data = array.data();
-        auto size = uint32_t(array.size());
+void writeToCout(const QByteArray &array)
+{
+    const auto *data = array.data();
+    auto size = uint32_t(array.size());
 
-        // We're writing the raw bytes to cout.
-        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
-        std::cout.write(reinterpret_cast<char *>(&size), 4);
-        std::cout.write(data, size);
-        std::cout.flush();
-    }
+    // We're writing the raw bytes to cout.
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+    std::cout.write(reinterpret_cast<char *>(&size), 4);
+    std::cout.write(data, size);
+    std::cout.flush();
+}
 
 }  // namespace nm::client
 
 // SERVER
 NativeMessagingServer::NativeMessagingServer()
-    : thread(*this)
+    : thread(new ReceiverThread(*this))
 {
+    this->thread->setObjectName("C2NMReceiver");
+}
+
+NativeMessagingServer::~NativeMessagingServer()
+{
+    if (!ipc::IpcQueue::remove("chatterino_gui"))
+    {
+        qCWarning(chatterinoNativeMessage) << "Failed to remove message queue";
+    }
+    this->thread->requestInterruption();
+    this->thread->quit();
+    // Most likely, the receiver thread will still wait for a message
+    if (!this->thread->wait(100))
+    {
+        this->thread->terminate();
+
+        if (!this->thread->wait(100))
+        {
+            qCWarning(chatterinoNativeMessage)
+                << "Failed to terminate thread cleanly";
+        }
+    }
 }
 
 void NativeMessagingServer::start()
 {
-    this->thread.start();
+    this->thread->start();
 }
 
 NativeMessagingServer::ReceiverThread::ReceiverThread(
@@ -161,7 +272,7 @@ void NativeMessagingServer::ReceiverThread::run()
         return;
     }
 
-    while (true)
+    while (!this->isInterruptionRequested())
     {
         auto buf = messageQueue->receive();
         if (buf.isEmpty())
@@ -236,14 +347,12 @@ void NativeMessagingServer::ReceiverThread::handleSelect(
     }
 
     postToThread([=] {
-        auto *app = getApp();
-
         if (!name.isEmpty())
         {
-            auto channel = app->twitch->getOrAddChannel(name);
-            if (app->twitch->watchingChannel.get() != channel)
+            auto channel = getApp()->getTwitch()->getOrAddChannel(name);
+            if (getApp()->getTwitch()->getWatchingChannel().get() != channel)
             {
-                app->twitch->watchingChannel.reset(channel);
+                getApp()->getTwitch()->setWatchingChannel(channel);
             }
         }
 
@@ -253,7 +362,8 @@ void NativeMessagingServer::ReceiverThread::handleSelect(
             auto *window = AttachedWindow::getForeground(args);
             if (!name.isEmpty())
             {
-                window->setChannel(app->twitch->getOrAddChannel(name));
+                window->setChannel(
+                    getApp()->getTwitch()->getOrAddChannel(name));
             }
 #endif
         }
@@ -294,8 +404,6 @@ void NativeMessagingServer::syncChannels(const QJsonArray &twitchChannels)
 {
     assertInGuiThread();
 
-    auto *app = getApp();
-
     std::vector<ChannelPtr> updated;
     updated.reserve(twitchChannels.size());
     for (const auto &value : twitchChannels)
@@ -306,7 +414,7 @@ void NativeMessagingServer::syncChannels(const QJsonArray &twitchChannels)
             continue;
         }
         // the deduping is done on the extension side
-        updated.emplace_back(app->twitch->getOrAddChannel(name));
+        updated.emplace_back(getApp()->getTwitch()->getOrAddChannel(name));
     }
 
     // This will destroy channels that aren't used anymore.

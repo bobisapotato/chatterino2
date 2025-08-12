@@ -3,12 +3,15 @@
 
 #    include "Application.hpp"
 #    include "common/Args.hpp"
+#    include "controllers/accounts/AccountController.hpp"
 #    include "controllers/plugins/PluginController.hpp"
 #    include "singletons/Paths.hpp"
 #    include "singletons/Settings.hpp"
 #    include "util/Helpers.hpp"
 #    include "util/LayoutCreator.hpp"
 #    include "util/RemoveScrollAreaBackground.hpp"
+#    include "widgets/PluginRepl.hpp"
+#    include "widgets/settingspages/SettingWidget.hpp"
 
 #    include <QCheckBox>
 #    include <QFormLayout>
@@ -37,10 +40,25 @@ PluginsPage::PluginsPage()
         auto group = layout.emplace<QGroupBox>("General plugin settings");
         this->generalGroup = group.getElement();
         auto groupLayout = group.setLayoutType<QFormLayout>();
+        auto *scaryLabel = new QLabel(
+            "Plugins can expand functionality of "
+            "Chatterino. They can be made in Lua. This functionality is "
+            "still in public alpha stage. Use ONLY the plugins you trust. "
+            "The permission system is best effort, always "
+            "assume plugins can bypass permissions and can execute "
+            "arbitrary code. To see how to create plugins " +
+            formatRichNamedLink("https://github.com/Chatterino/chatterino2/"
+                                "blob/master/docs/wip-plugins.md",
+                                "look at the manual") +
+            ".");
+        scaryLabel->setWordWrap(true);
+        scaryLabel->setOpenExternalLinks(true);
+        groupLayout->addRow(scaryLabel);
+
         auto *description =
             new QLabel("You can load plugins by putting them into " +
                        formatRichNamedLink(
-                           "file:///" + getIApp()->getPaths().pluginsDirectory,
+                           "file:///" + getApp()->getPaths().pluginsDirectory,
                            "the Plugins directory") +
                        ". Each one is a new directory.");
         description->setOpenExternalLinks(true);
@@ -63,6 +81,17 @@ PluginsPage::PluginsPage()
                                    "enable and disable them.");
             groupLayout->addRow(disabledLabel);
         }
+
+        if (getSettings()->pluginRepl.enabled)
+        {
+            groupLayout->addRow(SettingWidget::fontButton(
+                "REPL font", getSettings()->pluginRepl.fontFamily,
+                &PluginRepl::currentFont, [](const QFont &font) {
+                    getSettings()->pluginRepl.fontFamily = font.family();
+                    getSettings()->pluginRepl.fontSize = font.pointSize();
+                    getSettings()->pluginRepl.fontStyle = font.styleName();
+                }));
+        }
     }
 
     this->rebuildContent();
@@ -80,7 +109,7 @@ void PluginsPage::rebuildContent()
     this->scrollAreaWidget_.append(this->dataFrame_);
     auto layout = frame.setLayoutType<QVBoxLayout>();
     layout->setParent(this->dataFrame_);
-    for (const auto &[id, plugin] : getIApp()->getPlugins()->plugins())
+    for (const auto &[id, plugin] : getApp()->getPlugins()->plugins())
     {
         auto groupHeaderText =
             QString("%1 (%2, from %3)")
@@ -199,7 +228,7 @@ void PluginsPage::rebuildContent()
                         val.push_back(name);
                     }
                     getSettings()->enabledPlugins.setValue(val);
-                    getIApp()->getPlugins()->reload(name);
+                    getApp()->getPlugins()->reload(name);
                     this->rebuildContent();
                 });
             pluginEntry->addRow(toggleButton);
@@ -208,13 +237,23 @@ void PluginsPage::rebuildContent()
         auto *reloadButton = new QPushButton("Reload", this->dataFrame_);
         QObject::connect(reloadButton, &QPushButton::pressed,
                          [name = id, this]() {
-                             getIApp()->getPlugins()->reload(name);
+                             getApp()->getPlugins()->reload(name);
                              this->rebuildContent();
                          });
         pluginEntry->addRow(reloadButton);
         if (getApp()->getArgs().safeMode)
         {
             reloadButton->setEnabled(false);
+        }
+
+        if (getSettings()->pluginRepl.enabled)
+        {
+            auto *replButton = new QPushButton("Open REPL", this->dataFrame_);
+            QObject::connect(replButton, &QPushButton::clicked, [id]() {
+                auto *repl = new PluginRepl(id);
+                repl->show();
+            });
+            pluginEntry->addRow(replButton);
         }
     }
 }

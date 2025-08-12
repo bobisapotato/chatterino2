@@ -7,6 +7,7 @@
 #include "messages/Image.hpp"
 #include "providers/twitch/api/Helix.hpp"
 #include "util/DisplayBadge.hpp"
+#include "util/LoadPixmap.hpp"
 
 #include <QBuffer>
 #include <QFile>
@@ -78,59 +79,59 @@ void TwitchBadges::loadTwitchBadges()
                 break;
             }
             qCWarning(chatterinoTwitch) << errorMessage;
-            QFile file(":/twitch-badges.json");
-            if (!file.open(QFile::ReadOnly))
-            {
-                // Despite erroring out, we still want to reach the same point
-                // Loaded should still be set to true to not build up an endless queue, and the quuee should still be flushed.
-                qCWarning(chatterinoTwitch)
-                    << "Error loading Twitch Badges from the local backup file";
-                this->loaded();
-                return;
-            }
-            auto bytes = file.readAll();
-            auto doc = QJsonDocument::fromJson(bytes);
-
-            this->parseTwitchBadges(doc.object());
-
-            this->loaded();
+            this->loadLocalBadges();
         });
 }
 
-void TwitchBadges::parseTwitchBadges(QJsonObject root)
+void TwitchBadges::loadLocalBadges()
 {
-    auto badgeSets = this->badgeSets_.access();
-
-    auto jsonSets = root.value("badge_sets").toObject();
-    for (auto sIt = jsonSets.begin(); sIt != jsonSets.end(); ++sIt)
+    QFile file(":/twitch-badges.json");
+    if (!file.open(QFile::ReadOnly))
     {
-        auto key = sIt.key();
-        auto versions = sIt.value().toObject().value("versions").toObject();
+        // Despite erroring out, we still want to reach the same point
+        // Loaded should still be set to true to not build up an endless queue, and the quuee should still be flushed.
+        qCWarning(chatterinoTwitch)
+            << "Error loading Twitch Badges from the local backup file";
+        this->loaded();
+        return;
+    }
+    auto bytes = file.readAll();
+    auto doc = QJsonDocument::fromJson(bytes);
 
-        for (auto vIt = versions.begin(); vIt != versions.end(); ++vIt)
+    {
+        const auto &root = doc.object();
+        auto badgeSets = this->badgeSets_.access();
+
+        for (auto setIt = root.begin(); setIt != root.end(); setIt++)
         {
-            auto versionObj = vIt.value().toObject();
-            auto emote = Emote{
-                .name = {""},
-                .images =
-                    ImageSet{
-                        Image::fromUrl(
-                            {versionObj.value("image_url_1x").toString()}, 1,
-                            BADGE_BASE_SIZE),
-                        Image::fromUrl(
-                            {versionObj.value("image_url_2x").toString()}, .5,
-                            BADGE_BASE_SIZE * 2),
-                        Image::fromUrl(
-                            {versionObj.value("image_url_4x").toString()}, .25,
-                            BADGE_BASE_SIZE * 4),
-                    },
-                .tooltip = Tooltip{versionObj.value("title").toString()},
-                .homePage = Url{versionObj.value("click_url").toString()},
-            };
+            auto key = setIt.key();
 
-            (*badgeSets)[key][vIt.key()] = std::make_shared<Emote>(emote);
+            for (auto versionValue : setIt.value().toArray())
+            {
+                const auto versionObj = versionValue.toObject();
+                auto id = versionObj["id"].toString();
+                auto baseImage = versionObj["image"].toString();
+                auto emote = Emote{
+                    .name = {},
+                    .images =
+                        ImageSet{
+                            Image::fromUrl({baseImage + '1'}, 1,
+                                           BADGE_BASE_SIZE),
+                            Image::fromUrl({baseImage + '2'}, .5,
+                                           BADGE_BASE_SIZE * 2),
+                            Image::fromUrl({baseImage + '3'}, .25,
+                                           BADGE_BASE_SIZE * 4),
+                        },
+                    .tooltip = Tooltip{versionObj["title"].toString()},
+                    .homePage = Url{versionObj["url"].toString()},
+                };
+
+                (*badgeSets)[key][id] = std::make_shared<Emote>(emote);
+            }
         }
     }
+
+    this->loaded();
 }
 
 void TwitchBadges::loaded()
@@ -239,48 +240,20 @@ void TwitchBadges::getBadgeIcons(const QList<DisplayBadge> &badges,
     }
 }
 
-void TwitchBadges::loadEmoteImage(const QString &name, ImagePtr image,
+void TwitchBadges::loadEmoteImage(const QString &name, const ImagePtr &image,
                                   BadgeIconCallback &&callback)
 {
-    auto url = image->url().string;
-    NetworkRequest(url)
-        .concurrent()
-        .cache()
-        .onSuccess([this, name, callback, url](auto result) {
-            auto data = result.getData();
+    loadPixmapFromUrl(image->url(),
+                      [this, name, callback{std::move(callback)}](auto pixmap) {
+                          auto icon = std::make_shared<QIcon>(pixmap);
 
-            // const cast since we are only reading from it
-            QBuffer buffer(const_cast<QByteArray *>(&data));
-            buffer.open(QIODevice::ReadOnly);
-            QImageReader reader(&buffer);
+                          {
+                              std::unique_lock lock(this->badgesMutex_);
+                              this->badgesMap_[name] = icon;
+                          }
 
-            if (!reader.canRead() || reader.size().isEmpty())
-            {
-                qCWarning(chatterinoTwitch)
-                    << "Can't read badge image at" << url << "for" << name
-                    << reader.errorString();
-                return;
-            }
-
-            QImage image = reader.read();
-            if (image.isNull())
-            {
-                qCWarning(chatterinoTwitch)
-                    << "Failed reading badge image at" << url << "for" << name
-                    << reader.errorString();
-                return;
-            }
-
-            auto icon = std::make_shared<QIcon>(QPixmap::fromImage(image));
-
-            {
-                std::unique_lock lock(this->badgesMutex_);
-                this->badgesMap_[name] = icon;
-            }
-
-            callback(name, icon);
-        })
-        .execute();
+                          callback(name, icon);
+                      });
 }
 
 }  // namespace chatterino

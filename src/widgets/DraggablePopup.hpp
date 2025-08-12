@@ -9,6 +9,8 @@
 
 namespace chatterino {
 
+class PixmapButton;
+
 class DraggablePopup : public BaseWindow
 {
     Q_OBJECT
@@ -38,9 +40,17 @@ protected:
     // button pixmap
     void togglePinned();
 
+    /// Ensures that this popup is pinned (if it's expected to close automatically)
+    ///
+    /// @returns `true` if the popup was pinned as a result (i.e. if the popup
+    ///          was unpinned and said to automatically close before)
+    bool ensurePinned();
+
 private:
     // isMoving_ is set to true if the user is holding the left mouse button down and has moved the mouse a small amount away from the original click point (startPosDrag_)
     bool isMoving_ = false;
+
+    bool closeAutomatically_ = false;
 
     // startPosDrag_ is the coordinates where the user originally pressed the mouse button down to start dragging
     QPoint startPosDrag_;
@@ -52,7 +62,7 @@ private:
     // dragTimer_ is called ~60 times per second once the user has initiated dragging
     QTimer dragTimer_;
 
-    Button *pinButton_ = nullptr;
+    PixmapButton *pinButton_ = nullptr;
     bool isPinned_ = false;
 };
 

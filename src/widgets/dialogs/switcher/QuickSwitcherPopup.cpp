@@ -48,8 +48,9 @@ QuickSwitcherPopup::QuickSwitcherPopup(Window *parent)
     , switcherModel_(this)
     , window(parent)
 {
-    this->setWindowFlag(Qt::Dialog);
-    this->setActionOnFocusLoss(BaseWindow::ActionOnFocusLoss::Delete);
+    assert(this->windowFlags().testFlag(Qt::Dialog));
+
+    this->windowDeactivateAction = WindowDeactivateAction::Delete;
     this->setMinimumSize(QuickSwitcherPopup::MINIMUM_SIZE);
 
     this->initWidgets();
@@ -141,7 +142,7 @@ void QuickSwitcherPopup::updateSuggestions(const QString &text)
      * Timeout interval 0 means the call will be delayed until all window events
      * have been processed (cf. https://doc.qt.io/qt-5/qtimer.html#interval-prop).
      */
-    QTimer::singleShot(0, [this] {
+    QTimer::singleShot(0, this, [this] {
         this->adjustSize();
     });
 }

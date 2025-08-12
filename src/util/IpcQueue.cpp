@@ -81,7 +81,7 @@ public:
 };
 
 IpcQueue::IpcQueue(IpcQueuePrivate *priv)
-    : private_(priv){};
+    : private_(priv) {};
 IpcQueue::~IpcQueue() = default;
 
 std::pair<std::unique_ptr<IpcQueue>, QString> IpcQueue::tryReplaceOrCreate(
@@ -99,6 +99,11 @@ std::pair<std::unique_ptr<IpcQueue>, QString> IpcQueue::tryReplaceOrCreate(
     {
         return {nullptr, QString::fromLatin1(ex.what())};
     }
+}
+
+bool IpcQueue::remove(const char *name)
+{
+    return boost_ipc::message_queue::remove(name);
 }
 
 QByteArray IpcQueue::receive()

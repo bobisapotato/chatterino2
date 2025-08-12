@@ -1,10 +1,14 @@
 #include "common/Version.hpp"
 
+#include "common/Literals.hpp"
 #include "common/Modes.hpp"
 
 #include <QFileInfo>
+#include <QStringBuilder>
 
 namespace chatterino {
+
+using namespace literals;
 
 Version::Version()
     : version_(CHATTERINO_VERSION)
@@ -32,6 +36,11 @@ Version::Version()
 
     this->generateBuildString();
     this->generateRunningString();
+
+#ifdef Q_OS_WIN
+    // keep in sync with .CI/chatterino-installer.iss
+    this->appUserModelID_ = L"ChatterinoTeam.Chatterino";
+#endif
 }
 
 const Version &Version::instance()
@@ -79,11 +88,17 @@ QStringList Version::buildTags() const
 {
     QStringList tags;
 
-    tags.append("Qt " QT_VERSION_STR);
+    const auto *runtimeVersion = qVersion();
+    if (runtimeVersion != QLatin1String{QT_VERSION_STR})
+    {
+        tags.append(u"Qt "_s QT_VERSION_STR u" (running on " % runtimeVersion %
+                    u")");
+    }
+    else
+    {
+        tags.append(u"Qt "_s QT_VERSION_STR);
+    }
 
-#ifdef USEWINSDK
-    tags.append("Windows SDK");
-#endif
 #ifdef _MSC_FULL_VER
     tags.append("MSVC " + QString::number(_MSC_FULL_VER, 10));
 #endif
@@ -154,5 +169,12 @@ void Version::generateRunningString()
 
     this->runningString_ = s;
 }
+
+#ifdef Q_OS_WIN
+const std::wstring &Version::appUserModelID() const
+{
+    return this->appUserModelID_;
+}
+#endif
 
 }  // namespace chatterino

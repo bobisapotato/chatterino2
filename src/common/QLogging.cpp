@@ -11,7 +11,9 @@ Q_LOGGING_CATEGORY(chatterinoArgs, "chatterino.args", logThreshold);
 Q_LOGGING_CATEGORY(chatterinoBenchmark, "chatterino.benchmark", logThreshold);
 Q_LOGGING_CATEGORY(chatterinoBttv, "chatterino.bttv", logThreshold);
 Q_LOGGING_CATEGORY(chatterinoCache, "chatterino.cache", logThreshold);
+Q_LOGGING_CATEGORY(chatterinoCommands, "chatterino.commands", logThreshold);
 Q_LOGGING_CATEGORY(chatterinoCommon, "chatterino.common", logThreshold);
+Q_LOGGING_CATEGORY(chatterinoCompletion, "chatterino.completion", logThreshold);
 Q_LOGGING_CATEGORY(chatterinoCrashhandler, "chatterino.crashhandler",
                    logThreshold);
 Q_LOGGING_CATEGORY(chatterinoEmoji, "chatterino.emoji", logThreshold);
@@ -36,6 +38,7 @@ Q_LOGGING_CATEGORY(chatterinoNotification, "chatterino.notification",
                    logThreshold);
 Q_LOGGING_CATEGORY(chatterinoImageuploader, "chatterino.imageuploader",
                    logThreshold);
+Q_LOGGING_CATEGORY(chatterinoPronouns, "chatterino.pronouns", logThreshold);
 Q_LOGGING_CATEGORY(chatterinoPubSub, "chatterino.pubsub", logThreshold);
 Q_LOGGING_CATEGORY(chatterinoRecentMessages, "chatterino.recentmessages",
                    logThreshold);
@@ -50,6 +53,8 @@ Q_LOGGING_CATEGORY(chatterinoStreamlink, "chatterino.streamlink", logThreshold);
 Q_LOGGING_CATEGORY(chatterinoTheme, "chatterino.theme", logThreshold);
 Q_LOGGING_CATEGORY(chatterinoTokenizer, "chatterino.tokenizer", logThreshold);
 Q_LOGGING_CATEGORY(chatterinoTwitch, "chatterino.twitch", logThreshold);
+Q_LOGGING_CATEGORY(chatterinoTwitchEventSub, "chatterino.twitch.eventsub",
+                   logThreshold);
 Q_LOGGING_CATEGORY(chatterinoTwitchLiveController,
                    "chatterino.twitch.livecontroller", logThreshold);
 Q_LOGGING_CATEGORY(chatterinoUpdate, "chatterino.update", logThreshold);

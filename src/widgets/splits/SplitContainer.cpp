@@ -8,6 +8,7 @@
 #include "singletons/Fonts.hpp"
 #include "singletons/Theme.hpp"
 #include "singletons/WindowManager.hpp"
+#include "util/QMagicEnum.hpp"
 #include "widgets/helper/ChannelView.hpp"
 #include "widgets/helper/NotebookTab.hpp"
 #include "widgets/Notebook.hpp"
@@ -21,6 +22,7 @@
 #include <QJsonObject>
 #include <QMimeData>
 #include <QPainter>
+#include <QPainterPath>
 
 #include <algorithm>
 
@@ -38,7 +40,7 @@ SplitContainer::SplitContainer(Notebook *parent)
         Split::modifierStatusChanged, [this](auto modifiers) {
             this->layout();
 
-            if (modifiers == showResizeHandlesModifiers)
+            if (modifiers == SHOW_RESIZE_HANDLES_MODIFIERS)
             {
                 for (auto &handle : this->resizeHandles_)
                 {
@@ -54,7 +56,7 @@ SplitContainer::SplitContainer(Notebook *parent)
                 }
             }
 
-            if (modifiers == showSplitOverlayModifiers)
+            if (modifiers == SHOW_SPLIT_OVERLAY_MODIFIERS)
             {
                 this->setCursor(Qt::PointingHandCursor);
             }
@@ -131,7 +133,7 @@ Split *SplitContainer::appendNewSplit(bool openChannelNameDialog)
 void SplitContainer::insertSplit(Split *split, InsertOptions &&options)
 {
     // Queue up save because: Split added
-    getIApp()->getWindows()->queueSave();
+    getApp()->getWindows()->queueSave();
 
     assertInGuiThread();
 
@@ -213,12 +215,20 @@ void SplitContainer::addSplit(Split *split)
     auto &&conns = this->connectionsPerSplit_[split];
 
     conns.managedConnect(split->getChannelView().tabHighlightRequested,
-                         [this](HighlightState state) {
+                         [this, split](HighlightState state) {
                              if (this->tab_ != nullptr)
                              {
-                                 this->tab_->setHighlightState(state);
+                                 this->tab_->updateHighlightState(
+                                     state, split->getChannelView());
                              }
                          });
+
+    conns.managedConnect(split->channelChanged, [this, split] {
+        if (this->tab_ != nullptr)
+        {
+            this->tab_->newHighlightSourceAdded(split->getChannelView());
+        }
+    });
 
     conns.managedConnect(split->getChannelView().liveStatusChanged, [this]() {
         this->refreshTabLiveStatus();
@@ -345,7 +355,7 @@ SplitContainer::Position SplitContainer::releaseSplit(Split *split)
 SplitContainer::Position SplitContainer::deleteSplit(Split *split)
 {
     // Queue up save because: Split removed
-    getIApp()->getWindows()->queueSave();
+    getApp()->getWindows()->queueSave();
 
     assertInGuiThread();
     assert(split != nullptr);
@@ -493,7 +503,7 @@ void SplitContainer::layout()
     std::vector<ResizeRect> resizeRects;
 
     const bool addSpacing =
-        Split::modifierStatus == showAddSplitRegions || this->isDragging_;
+        Split::modifierStatus == SHOW_ADD_SPLIT_REGIONS || this->isDragging_;
     this->baseNode_.layout(addSpacing, this->scale(), dropRects, resizeRects);
 
     this->dropRects_ = dropRects;
@@ -556,7 +566,7 @@ void SplitContainer::layout()
             handle->setVertical(resizeRect.vertical);
             handle->node = resizeRect.node;
 
-            if (Split::modifierStatus == showResizeHandlesModifiers)
+            if (Split::modifierStatus == SHOW_RESIZE_HANDLES_MODIFIERS)
             {
                 handle->show();
                 handle->raise();
@@ -604,6 +614,29 @@ void SplitContainer::mouseReleaseEvent(QMouseEvent *event)
     }
 }
 
+void SplitContainer::paintSplitBorder(Node *node, QPainter *painter)
+{
+    switch (node->type_)
+    {
+        case Node::Type::Split: {
+            QRectF nodeRect = node->geometry_;
+            painter->setPen(this->theme->tabs.dividerLine);
+            QPainterPath p = QPainterPath();
+            p.addRect(nodeRect);
+            painter->strokePath(p, painter->pen());
+        }
+        break;
+        case Node::Type::VerticalContainer:
+        case Node::Type::HorizontalContainer: {
+            for (std::unique_ptr<Node> &child : node->children_)
+            {
+                paintSplitBorder(child.get(), painter);
+            }
+        }
+        break;
+    }
+}
+
 void SplitContainer::paintEvent(QPaintEvent * /*event*/)
 {
     QPainter painter(this);
@@ -614,8 +647,8 @@ void SplitContainer::paintEvent(QPaintEvent * /*event*/)
 
         painter.setPen(this->theme->splits.header.text);
 
-        const auto font = getIApp()->getFonts()->getFont(FontStyle::ChatMedium,
-                                                         this->scale());
+        const auto font =
+            getApp()->getFonts()->getFont(FontStyle::ChatMedium, this->scale());
         painter.setFont(font);
 
         QString text = "Click to add a split";
@@ -634,20 +667,13 @@ void SplitContainer::paintEvent(QPaintEvent * /*event*/)
     }
     else
     {
-        if (getIApp()->getThemes()->isLightTheme())
-        {
-            painter.fillRect(rect(), QColor("#999"));
-        }
-        else
-        {
-            painter.fillRect(rect(), QColor("#555"));
-        }
+        this->paintSplitBorder(this->getBaseNode(), &painter);
     }
 
     for (DropRect &dropRect : this->dropRects_)
     {
-        QColor border = getIApp()->getThemes()->splits.dropTargetRectBorder;
-        QColor background = getIApp()->getThemes()->splits.dropTargetRect;
+        QColor border = getApp()->getThemes()->splits.dropTargetRectBorder;
+        QColor background = getApp()->getThemes()->splits.dropTargetRect;
 
         if (!dropRect.rect.contains(this->mouseOverPoint_))
         {
@@ -717,7 +743,7 @@ void SplitContainer::dragEnterEvent(QDragEnterEvent *event)
 
 void SplitContainer::mouseMoveEvent(QMouseEvent *event)
 {
-    if (Split::modifierStatus == showSplitOverlayModifiers)
+    if (Split::modifierStatus == SHOW_SPLIT_OVERLAY_MODIFIERS)
     {
         this->setCursor(Qt::PointingHandCursor);
     }
@@ -762,6 +788,11 @@ SplitContainer::Node *SplitContainer::getBaseNode()
     return &this->baseNode_;
 }
 
+NodeDescriptor SplitContainer::buildDescriptor() const
+{
+    return this->buildDescriptorRecursively(&this->baseNode_);
+}
+
 void SplitContainer::applyFromDescriptor(const NodeDescriptor &rootNode)
 {
     assert(this->baseNode_.type_ == Node::Type::EmptyRoot);
@@ -774,7 +805,7 @@ void SplitContainer::applyFromDescriptor(const NodeDescriptor &rootNode)
 
 void SplitContainer::popup()
 {
-    Window &window = getIApp()->getWindows()->createWindow(WindowType::Popup);
+    Window &window = getApp()->getWindows()->createWindow(WindowType::Popup);
     auto *popupContainer = window.getNotebook().getOrAddSelectedPage();
 
     QJsonObject encodedTab;
@@ -797,6 +828,59 @@ void SplitContainer::popup()
     }
 
     window.show();
+}
+
+QString channelTypeToString(Channel::Type value) noexcept
+{
+    using Type = chatterino::Channel::Type;
+    switch (value)
+    {
+        default:
+            assert(false && "value cannot be serialized");
+            return "never";
+
+        case Type::Twitch:
+            return "twitch";
+        case Type::TwitchWhispers:
+            return "whispers";
+        case Type::TwitchWatching:
+            return "watching";
+        case Type::TwitchMentions:
+            return "mentions";
+        case Type::TwitchLive:
+            return "live";
+        case Type::TwitchAutomod:
+            return "automod";
+        case Type::Misc:
+            return "misc";
+    }
+}
+
+NodeDescriptor SplitContainer::buildDescriptorRecursively(
+    const Node *currentNode) const
+{
+    if (currentNode->children_.empty())
+    {
+        const auto channelType =
+            currentNode->split_->getIndirectChannel().getType();
+
+        SplitNodeDescriptor result;
+        result.type_ = channelTypeToString(channelType);
+        result.channelName_ = currentNode->split_->getChannel()->getName();
+        result.filters_ = currentNode->split_->getFilters();
+        return result;
+    }
+
+    ContainerNodeDescriptor descriptor;
+    for (const auto &child : currentNode->children_)
+    {
+        descriptor.vertical_ =
+            currentNode->type_ == Node::Type::VerticalContainer;
+        descriptor.items_.push_back(
+            this->buildDescriptorRecursively(child.get()));
+    }
+
+    return descriptor;
 }
 
 void SplitContainer::applyFromDescriptorRecursively(
@@ -849,9 +933,9 @@ void SplitContainer::applyFromDescriptorRecursively(
                 }
                 const auto &splitNode = *inner;
                 auto *split = new Split(this);
+                split->setFilters(splitNode.filters_);
                 split->setChannel(WindowManager::decodeChannel(splitNode));
                 split->setModerationMode(splitNode.moderationMode_);
-                split->setFilters(splitNode.filters_);
 
                 auto *node = new Node();
                 node->parent_ = baseNode;
@@ -1443,15 +1527,15 @@ void SplitContainer::DropOverlay::paintEvent(QPaintEvent * /*event*/)
     {
         if (!foundMover && rect.rect.contains(this->mouseOverPoint_))
         {
-            painter.setBrush(getIApp()->getThemes()->splits.dropPreview);
-            painter.setPen(getIApp()->getThemes()->splits.dropPreviewBorder);
+            painter.setBrush(getApp()->getThemes()->splits.dropPreview);
+            painter.setPen(getApp()->getThemes()->splits.dropPreviewBorder);
             foundMover = true;
         }
         else
         {
             painter.setBrush(QColor(0, 0, 0, 0));
             painter.setPen(QColor(0, 0, 0, 0));
-            // painter.setPen(getIApp()->getThemes()->splits.dropPreviewBorder);
+            // painter.setPen(getApp()->getThemes()->splits.dropPreviewBorder);
         }
 
         painter.drawRect(rect.rect);
@@ -1467,7 +1551,7 @@ void SplitContainer::DropOverlay::dragMoveEvent(QDragMoveEvent *event)
 {
     event->acceptProposedAction();
 
-    this->mouseOverPoint_ = event->pos();
+    this->mouseOverPoint_ = event->position().toPoint();
     this->update();
 }
 
@@ -1533,10 +1617,10 @@ SplitContainer::ResizeHandle::ResizeHandle(SplitContainer *_parent)
 void SplitContainer::ResizeHandle::paintEvent(QPaintEvent * /*event*/)
 {
     QPainter painter(this);
-    painter.setPen(QPen(getIApp()->getThemes()->splits.resizeHandle, 2));
+    painter.setPen(QPen(getApp()->getThemes()->splits.resizeHandle, 2));
 
     painter.fillRect(this->rect(),
-                     getIApp()->getThemes()->splits.resizeHandleBackground);
+                     getApp()->getThemes()->splits.resizeHandleBackground);
 
     if (this->vertical_)
     {
@@ -1589,14 +1673,15 @@ void SplitContainer::ResizeHandle::mouseMoveEvent(QMouseEvent *event)
     QPoint bottomRight = this->parent->mapToGlobal(
         this->node->geometry_.bottomRight().toPoint());
 
-    int globalX = topLeft.x() > event->globalX()
+    auto globalPos = event->globalPosition().toPoint();
+    int globalX = topLeft.x() > globalPos.x()
                       ? topLeft.x()
-                      : (bottomRight.x() < event->globalX() ? bottomRight.x()
-                                                            : event->globalX());
-    int globalY = topLeft.y() > event->globalY()
+                      : (bottomRight.x() < globalPos.x() ? bottomRight.x()
+                                                         : globalPos.x());
+    int globalY = topLeft.y() > globalPos.y()
                       ? topLeft.y()
-                      : (bottomRight.y() < event->globalY() ? bottomRight.y()
-                                                            : event->globalY());
+                      : (bottomRight.y() < globalPos.y() ? bottomRight.y()
+                                                         : globalPos.y());
 
     QPoint mousePoint(globalX, globalY);
 

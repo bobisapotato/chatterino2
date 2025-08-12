@@ -1,6 +1,7 @@
 #pragma once
 
 #include "widgets/BaseWidget.hpp"
+#include "widgets/NotebookEnums.hpp"
 
 #include <pajlada/signals/signal.hpp>
 #include <pajlada/signals/signalholder.hpp>
@@ -10,25 +11,19 @@
 #include <QWidget>
 
 #include <functional>
+#include <span>
 
 namespace chatterino {
 
+class Button;
+class PixmapButton;
+class SvgButton;
 class Window;
+class DrawnButton;
 class UpdateDialog;
-class NotebookButton;
 class NotebookTab;
 class SplitContainer;
-
-enum NotebookTabLocation { Top = 0, Left = 1, Right = 2, Bottom = 3 };
-
-// Controls the visibility of tabs in this notebook
-enum NotebookTabVisibility : int {
-    // Show all tabs
-    AllTabs = 0,
-
-    // Only show tabs containing splits that are live
-    LiveOnly = 1,
-};
+class Split;
 
 using TabVisibilityFilter = std::function<bool(const NotebookTab *)>;
 
@@ -42,7 +37,16 @@ public:
 
     NotebookTab *addPage(QWidget *page, QString title = QString(),
                          bool select = false);
+
+    /**
+     * @brief Adds a page to the Notebook at a given position.
+     *
+     * @param position if set to -1, adds the page to the end
+     **/
+    NotebookTab *addPageAt(QWidget *page, int position,
+                           QString title = QString(), bool select = false);
     void removePage(QWidget *page);
+    void duplicatePage(QWidget *page);
     void removeCurrentPage();
 
     /**
@@ -107,9 +111,6 @@ public:
     bool getAllowUserTabManagement() const;
     void setAllowUserTabManagement(bool value);
 
-    bool getShowTabs() const;
-    void setShowTabs(bool value);
-
     bool getShowAddButton() const;
     void setShowAddButton(bool value);
 
@@ -124,13 +125,25 @@ public:
     void refresh();
 
 protected:
+    bool getShowTabs() const;
+    void setShowTabs(bool value);
+
     void scaleChangedEvent(float scale_) override;
     void resizeEvent(QResizeEvent *) override;
     void mousePressEvent(QMouseEvent *event) override;
     void paintEvent(QPaintEvent *) override;
 
-    NotebookButton *getAddButton();
-    NotebookButton *addCustomButton();
+    DrawnButton *addButton_;
+
+    template <typename T>
+    T *addCustomButton(auto &&...args)
+    {
+        auto *btn = new T(std::forward<decltype(args)>(args)..., this);
+        this->customButtons_.push_back(btn);
+        this->performLayout();
+
+        return btn;
+    }
 
     struct Item {
         NotebookTab *tab{};
@@ -157,8 +170,28 @@ protected:
      **/
     bool shouldShowTab(const NotebookTab *tab) const;
 
-private:
     void performLayout(bool animate = false);
+
+private:
+    struct LayoutContext {
+        int left = 0;
+        int right = 0;
+        int bottom = 0;
+        float scale = 0;
+        int tabHeight = 0;
+        int minimumTabAreaSpace = 0;
+        int addButtonWidth = 0;
+        int lineThickness = 0;
+        int tabSpacer = 0;
+
+        int buttonWidth = 0;
+        int buttonHeight = 0;
+
+        std::span<Item> items;
+    };
+
+    void performHorizontalLayout(const LayoutContext &ctx, bool animated);
+    void performVerticalLayout(const LayoutContext &ctx, bool animated);
 
     /**
      * @brief Show a popup informing the user of some big tab visibility changes
@@ -169,7 +202,6 @@ private:
      * @brief Updates the visibility state of all tabs
      **/
     void updateTabVisibility();
-    void updateTabVisibilityMenuAction();
     void resizeAddButton();
 
     bool containsPage(QWidget *page);
@@ -185,17 +217,20 @@ private:
     QMenu *menu_ = nullptr;
     QWidget *selectedPage_ = nullptr;
 
-    NotebookButton *addButton_;
-    std::vector<NotebookButton *> customButtons_;
+    std::vector<Button *> customButtons_;
 
     bool allowUserTabManagement_ = false;
     bool showTabs_ = true;
     bool showAddButton_ = false;
     int lineOffset_ = 20;
     bool lockNotebookLayout_ = false;
+
+    bool refreshPaused_ = false;
+    bool refreshRequested_ = false;
+
     NotebookTabLocation tabLocation_ = NotebookTabLocation::Top;
+
     QAction *lockNotebookLayoutAction_;
-    QAction *showTabsAction_;
     QAction *toggleTopMostAction_;
 
     // This filter, if set, is used to figure out the visibility of
@@ -216,7 +251,17 @@ public:
     void themeChangedEvent() override;
 
     void addNotebookActionsToMenu(QMenu *menu) override;
-    void toggleOfflineTabs();
+
+    void forEachSplit(const std::function<void(Split *)> &cb);
+
+    /**
+     * Toggles between the "Show all tabs" and "Hide all tabs" tab visibility states
+     */
+    void toggleTabVisibility();
+
+    QAction *showAllTabsAction;
+    QAction *onlyShowLiveTabsAction;
+    QAction *hideAllTabsAction;
 
 protected:
     void showEvent(QShowEvent *event) override;
@@ -226,11 +271,8 @@ private:
 
     pajlada::Signals::SignalHolder signalHolder_;
 
-    QAction *toggleOfflineTabsAction_;
-    void updateToggleOfflineTabsHotkey(NotebookTabVisibility newTabVisibility);
-
     // Main window on Windows has basically a duplicate of this in Window
-    NotebookButton *streamerModeIcon_{};
+    PixmapButton *streamerModeIcon_{};
     void updateStreamerModeIcon();
 };
 

@@ -12,12 +12,23 @@ namespace chatterino::mock {
 class EmptyApplication : public IApplication
 {
 public:
-    EmptyApplication()
-        : updates_(this->paths_)
+    EmptyApplication() = default;
+
+    explicit EmptyApplication(const QString &settingsData)
     {
+        QFile settingsFile(this->settingsDir.filePath("settings.json"));
+        settingsFile.open(QIODevice::WriteOnly | QIODevice::Text);
+        settingsFile.write(settingsData.toUtf8());
+        settingsFile.flush();
+        settingsFile.close();
     }
 
-    virtual ~EmptyApplication() = default;
+    ~EmptyApplication() override = default;
+
+    bool isTest() const override
+    {
+        return true;
+    }
 
     const Paths &getPaths() override
     {
@@ -130,7 +141,7 @@ public:
         return nullptr;
     }
 
-    Logging *getChatLogger() override
+    ILogging *getChatLogger() override
     {
         assert(!"getChatLogger was called without being initialized");
         return nullptr;
@@ -197,15 +208,17 @@ public:
     }
 #endif
 
-    Updates &getUpdates() override
-    {
-        return this->updates_;
-    }
-
     BttvEmotes *getBttvEmotes() override
     {
         assert(false && "EmptyApplication::getBttvEmotes was called without "
                         "being initialized");
+        return nullptr;
+    }
+
+    BttvLiveUpdates *getBttvLiveUpdates() override
+    {
+        assert(false && "EmptyApplication::getBttvLiveUpdates was called "
+                        "without being initialized");
         return nullptr;
     }
 
@@ -223,6 +236,13 @@ public:
         return nullptr;
     }
 
+    SeventvEventAPI *getSeventvEventAPI() override
+    {
+        assert(false && "EmptyApplication::getSeventvEventAPI was called "
+                        "without being initialized");
+        return nullptr;
+    }
+
     ILinkResolver *getLinkResolver() override
     {
         assert(false && "EmptyApplication::getLinkResolver was called without "
@@ -237,11 +257,30 @@ public:
         return nullptr;
     }
 
-protected:
+    ITwitchUsers *getTwitchUsers() override
+    {
+        assert(false && "EmptyApplication::getTwitchUsers was called without "
+                        "being initialized");
+        return nullptr;
+    }
+
+    pronouns::Pronouns *getPronouns() override
+    {
+        assert(false && "EmptyApplication::getPronouns was called without "
+                        "being initialized");
+        return nullptr;
+    }
+
+    eventsub::IController *getEventSub() override
+    {
+        assert(false && "EmptyApplication::getEventSub was called without "
+                        "being initialized");
+        return nullptr;
+    }
+
     QTemporaryDir settingsDir;
     Paths paths_;
     Args args_;
-    Updates updates_;
 };
 
 }  // namespace chatterino::mock

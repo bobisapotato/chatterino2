@@ -1,7 +1,8 @@
 #pragma once
 
 #include "common/Common.hpp"
-#include "widgets/helper/Button.hpp"
+#include "widgets/buttons/Button.hpp"
+#include "widgets/helper/ChannelView.hpp"
 #include "widgets/Notebook.hpp"
 
 #include <pajlada/settings/setting.hpp>
@@ -11,7 +12,7 @@
 
 namespace chatterino {
 
-#define NOTEBOOK_TAB_HEIGHT 28
+inline constexpr int NOTEBOOK_TAB_HEIGHT = 28;
 
 class SplitContainer;
 
@@ -59,24 +60,40 @@ public:
      **/
     bool isLive() const;
 
+    /**
+     * @brief Sets the highlight state of this tab clearing highlight sources
+     *
+     * Obeys the HighlightsEnabled setting and highlight states hierarchy
+     */
     void setHighlightState(HighlightState style);
+    /**
+     * @brief Updates the highlight state and highlight sources of this tab
+     *
+     * Obeys the HighlightsEnabled setting and the highlight state hierarchy and tracks the highlight state update sources
+     */
+    void updateHighlightState(HighlightState style,
+                              const ChannelView &channelViewSource);
+    void copyHighlightStateAndSourcesFrom(const NotebookTab *sourceTab);
+    void setHighlightsEnabled(const bool &newVal);
+    void newHighlightSourceAdded(const ChannelView &channelViewSource);
+    bool hasHighlightsEnabled() const;
     HighlightState highlightState() const;
 
-    void setHighlightsEnabled(const bool &newVal);
-    bool hasHighlightsEnabled() const;
-
-    void moveAnimated(QPoint pos, bool animated = true);
+    void moveAnimated(QPoint targetPos, bool animated = true);
 
     QRect getDesiredRect() const;
-    void hideTabXChanged();
+    void tabSizeChanged();
 
     void growWidth(int width);
-    int normalTabWidth();
+    int normalTabWidth() const;
 
 protected:
     void themeChangedEvent() override;
 
     void paintEvent(QPaintEvent *) override;
+    void paintContent(QPainter &painter) override
+    {
+    }
 
     void mousePressEvent(QMouseEvent *event) override;
     void mouseReleaseEvent(QMouseEvent *event) override;
@@ -89,6 +106,7 @@ protected:
     void leaveEvent(QEvent *) override;
 
     void dragEnterEvent(QDragEnterEvent *event) override;
+    void dropEvent(QDropEvent *event) override;
 
     void mouseMoveEvent(QMouseEvent *event) override;
     void wheelEvent(QWheelEvent *event) override;
@@ -100,13 +118,24 @@ protected:
 private:
     void showRenameDialog();
 
-    bool hasXButton();
-    bool shouldDrawXButton();
-    QRect getXRect();
+    bool hasXButton() const;
+    bool shouldDrawXButton() const;
+    QRect getXRect() const;
     void titleUpdated();
 
+    int normalTabWidthForHeight(int height) const;
+
+    bool shouldMessageHighlight(const ChannelView &channelViewSource) const;
+
+    using HighlightSources =
+        std::unordered_map<ChannelView::ChannelViewID, HighlightState>;
+    HighlightSources highlightSources_;
+
+    void removeHighlightStateChangeSources(const HighlightSources &toRemove);
+    void removeHighlightSource(const ChannelView::ChannelViewID &source);
+    void updateHighlightStateDueSourcesChange();
+
     QPropertyAnimation positionChangedAnimation_;
-    bool positionChangedAnimationRunning_ = false;
     QPoint positionAnimationDesiredPoint_;
 
     Notebook *notebook_;

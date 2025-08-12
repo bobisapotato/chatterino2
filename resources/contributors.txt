@@ -35,7 +35,7 @@ Confuseh | https://github.com/Confuseh |
 ch-ems | https://github.com/ch-ems |
 Bur0k | https://github.com/Bur0k |
 nuuls | https://github.com/nuuls |
-Chronophylos | https://github.com/Chronophylos | 
+Chronophylos | https://github.com/Chronophylos |
 Ckath | https://github.com/Ckath |
 matijakevic | https://github.com/matijakevic |
 nforro | https://github.com/nforro |
@@ -77,6 +77,17 @@ SputNikPlop | https://github.com/SputNikPlop |
 fraxx | https://github.com/fraxxio | :/avatars/fraxx.png
 KleberPF | https://github.com/KleberPF |
 nealxm | https://github.com/nealxm | :/avatars/nealxm.png
+Niller2005 | https://github.com/Niller2005 | :/avatars/niller2005.png
+JakeRYW | https://github.com/JakeRYW | :/avatars/jakeryw.png
+maliByatzes | https://github.com/maliByatzes | :/avatars/maliByatzes.png
+Zakary2841 | https://github.com/Zakary2841 | :/avatars/zakary2841.png
+MiguVT | https://github.com/MiguVT | :/avatars/miguvt.png
+jacob-thompson | https://github.com/jacob-thompson |
+Jujufrost | https://github.com/Jujufrost |
+occluder | https://github.com/occluder | :/avatars/occluder.png
+knobby-tires | https://github.com/knobby-tires | :/avatars/knobby-tires.jpg
+droidicus | https://github.com/droidicus | :/avatars/droidicus.png
+vincent0955 | https://github.com/vincent0955 | :/avatars/vincent0955.png
 
 # If you are a contributor add yourself above this line
 
@@ -88,5 +99,6 @@ Ian321 | https://github.com/Ian321 |
 Yardanico | https://github.com/Yardanico |
 huti26 | https://github.com/huti26 |
 chrisduerr | https://github.com/chrisduerr |
+ynot01 | https://github.com/ynot01 | :/avatars/ynot01.png
 
 # Otherwise add yourself right above this one

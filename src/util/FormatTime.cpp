@@ -7,15 +7,15 @@ namespace chatterino {
 
 namespace {
 
-    void appendDuration(int count, QChar &&suffix, QString &out)
+void appendDuration(int count, QChar &&suffix, QString &out)
+{
+    if (!out.isEmpty())
     {
-        if (!out.isEmpty())
-        {
-            out.append(' ');
-        }
-        out.append(QString::number(count));
-        out.append(suffix);
+        out.append(' ');
     }
+    out.append(QString::number(count));
+    out.append(suffix);
+}
 
 }  // namespace
 
@@ -48,7 +48,7 @@ QString formatTime(int totalSeconds)
     return res;
 }
 
-QString formatTime(QString totalSecondsString)
+QString formatTime(const QString &totalSecondsString)
 {
     bool ok = true;
     int totalSeconds(totalSecondsString.toInt(&ok));

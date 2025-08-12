@@ -1,4 +1,4 @@
-#include "SearchPopup.hpp"
+#include "widgets/helper/SearchPopup.hpp"
 
 #include "Application.hpp"
 #include "common/Channel.hpp"
@@ -14,6 +14,7 @@
 #include "messages/search/SubstringPredicate.hpp"
 #include "messages/search/SubtierPredicate.hpp"
 #include "singletons/Settings.hpp"
+#include "singletons/Theme.hpp"
 #include "singletons/WindowManager.hpp"
 #include "widgets/helper/ChannelView.hpp"
 #include "widgets/splits/Split.hpp"
@@ -55,7 +56,7 @@ ChannelPtr SearchPopup::filter(const QString &text, const QString &channelName,
             auto overrideFlags = std::optional<MessageFlags>(message->flags);
             overrideFlags->set(MessageFlag::DoNotLog);
 
-            channel->addMessage(message, overrideFlags);
+            channel->addMessage(message, MessageContext::Repost, overrideFlags);
         }
     }
 
@@ -80,6 +81,8 @@ SearchPopup::SearchPopup(QWidget *parent, Split *split)
     }
     this->resize(400, 600);
     this->addShortcuts();
+
+    this->themeChangedEvent();
 }
 
 void SearchPopup::addShortcuts()
@@ -103,7 +106,7 @@ void SearchPopup::addShortcuts()
         {"scrollPage", nullptr},
     };
 
-    this->shortcuts_ = getIApp()->getHotkeys()->shortcutsForCategory(
+    this->shortcuts_ = getApp()->getHotkeys()->shortcutsForCategory(
         HotkeyCategory::PopupWindow, actions, this);
 }
 
@@ -138,7 +141,7 @@ void SearchPopup::goToMessage(const MessagePtr &message)
         if (type == Channel::Type::TwitchMentions ||
             type == Channel::Type::TwitchAutomod)
         {
-            getIApp()->getWindows()->scrollToMessage(message);
+            getApp()->getWindows()->scrollToMessage(message);
             return;
         }
 
@@ -212,6 +215,13 @@ bool SearchPopup::eventFilter(QObject *object, QEvent *event)
     return false;
 }
 
+void SearchPopup::themeChangedEvent()
+{
+    BasePopup::themeChangedEvent();
+
+    this->setPalette(getTheme()->palette);
+}
+
 void SearchPopup::search()
 {
     if (this->snapshot_.size() == 0)
@@ -241,10 +251,8 @@ LimitedQueueSnapshot<MessagePtr> SearchPopup::buildSnapshot()
         const LimitedQueueSnapshot<MessagePtr> &snapshot =
             sharedView.channel()->getMessageSnapshot();
 
-        // TODO: implement iterator on LimitedQueueSnapshot?
-        for (auto i = 0; i < snapshot.size(); ++i)
+        for (const auto &message : snapshot)
         {
-            const MessagePtr &message = snapshot[i];
             if (filterSet && !filterSet->filter(message, sharedView.channel()))
             {
                 continue;

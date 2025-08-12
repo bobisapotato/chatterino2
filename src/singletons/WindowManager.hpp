@@ -1,18 +1,21 @@
 #pragma once
 
 #include "common/FlagsEnum.hpp"
-#include "common/Singleton.hpp"
+#include "util/SignalListener.hpp"
 #include "widgets/splits/SplitContainer.hpp"
 
 #include <pajlada/settings/settinglistener.hpp>
+#include <QObject>
 #include <QPoint>
 #include <QTimer>
 
 #include <memory>
+#include <set>
 
 namespace chatterino {
 
 class Settings;
+class Args;
 class Paths;
 class Window;
 class ChannelView;
@@ -24,6 +27,8 @@ using ChannelPtr = std::shared_ptr<Channel>;
 struct Message;
 using MessagePtr = std::shared_ptr<const Message>;
 class WindowLayout;
+class Theme;
+class Fonts;
 
 enum class MessageElementFlag : int64_t;
 using MessageElementFlags = FlagsEnum<MessageElementFlag>;
@@ -32,13 +37,19 @@ enum class WindowType;
 enum class SettingsDialogPreference;
 class FramelessEmbedWindow;
 
-class WindowManager final : public Singleton
+class WindowManager final : public QObject
 {
+    Q_OBJECT
+
+    Theme &themes;
+    const Args &appArgs;
+
 public:
     static const QString WINDOW_LAYOUT_FILENAME;
 
-    explicit WindowManager(const Paths &paths);
-    ~WindowManager() override;
+    explicit WindowManager(const Args &appArgs_, const Paths &paths,
+                           Settings &settings, Theme &themes_, Fonts &fonts);
+    ~WindowManager();
 
     WindowManager(const WindowManager &) = delete;
     WindowManager(WindowManager &&) = delete;
@@ -99,11 +110,12 @@ public:
      */
     void scrollToMessage(const MessagePtr &message);
 
-    QPoint emotePopupPos();
-    void setEmotePopupPos(QPoint pos);
+    QRect emotePopupBounds() const;
+    void setEmotePopupBounds(QRect bounds);
 
-    void initialize(Settings &settings, const Paths &paths) override;
-    void save() override;
+    // Set up some final signals & actually show the windows
+    void initialize();
+    void save();
     void closeAll();
 
     int getGeneration() const;
@@ -121,6 +133,11 @@ public:
     // If a save was already queued up, we reset the to happen in 10 seconds
     // again
     void queueSave();
+
+    /// Toggles the inertia in all open overlay windows
+    void toggleAllOverlayInertia();
+
+    std::set<QString> getVisibleChannelNames() const;
 
     /// Signals
     pajlada::Signals::NoArgSignal gifRepaintRequested;
@@ -151,10 +168,9 @@ private:
     // Contains the full path to the window layout file, e.g. /home/pajlada/.local/share/Chatterino/Settings/window-layout.json
     const QString windowLayoutFilePath;
 
-    bool initialized_ = false;
     bool shuttingDown_ = false;
 
-    QPoint emotePopupPos_;
+    QRect emotePopupBounds_;
 
     std::atomic<int> generation_{0};
 
@@ -165,9 +181,16 @@ private:
     Window *selectedWindow_{};
 
     MessageElementFlags wordFlags_{};
-    pajlada::SettingListener wordFlagsListener_;
 
     QTimer *saveTimer;
+
+    pajlada::Signals::SignalHolder signalHolder;
+
+    SignalListener updateWordTypeMaskListener;
+    SignalListener forceLayoutChannelViewsListener;
+    SignalListener layoutChannelViewsListener;
+    SignalListener invalidateChannelViewBuffersListener;
+    SignalListener repaintVisibleChatWidgetsListener;
 
     friend class Window;  // this is for selectedWindow_
 };

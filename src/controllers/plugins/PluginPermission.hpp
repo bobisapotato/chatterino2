@@ -10,10 +10,13 @@ namespace chatterino {
 
 struct PluginPermission {
     explicit PluginPermission(const QJsonObject &obj);
+    // This is for tests
+    PluginPermission() = default;
 
     enum class Type {
         FilesystemRead,
         FilesystemWrite,
+        Network,
     };
     Type type;
     std::vector<QString> errors;

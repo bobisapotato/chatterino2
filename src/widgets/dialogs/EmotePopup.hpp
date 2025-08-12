@@ -25,6 +25,11 @@ public:
 
     pajlada::Signals::Signal<Link> linkClicked;
 
+protected:
+    void resizeEvent(QResizeEvent *event) override;
+    void moveEvent(QMoveEvent *event) override;
+    void themeChangedEvent() override;
+
 private:
     ChannelView *globalEmotesView_{};
     ChannelView *channelEmotesView_{};
@@ -47,6 +52,10 @@ private:
     void filterEmotes(const QString &text);
     void addShortcuts() override;
     bool eventFilter(QObject *object, QEvent *event) override;
+
+    void reloadEmotes();
+
+    void saveBounds() const;
 };
 
 }  // namespace chatterino

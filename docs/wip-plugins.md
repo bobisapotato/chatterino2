@@ -85,6 +85,24 @@ Example:
 }
 ```
 
+### Network
+
+Allows the plugin to send HTTP requests.
+
+Example:
+
+```json
+{
+  ...,
+  "permissions": [
+    {
+      "type": "Network"
+    },
+    ...
+  ]
+}
+```
+
 ## Plugins with Typescript
 
 If you prefer, you may use [TypescriptToLua](https://typescripttolua.github.io)
@@ -153,7 +171,7 @@ function cmd_words(ctx)
     -- ctx contains:
     -- words - table of words supplied to the command including the trigger
     -- channel - the channel the command is being run in
-    channel:add_system_message("Words are: " .. table.concat(ctx.words, " "))
+    ctx.channel:add_system_message("Words are: " .. table.concat(ctx.words, " "))
 end
 
 c2.register_command("/words", cmd_words)
@@ -165,7 +183,7 @@ Limitations/known issues:
   rebuilding the window content caused by reloading another plugin will solve this.
 - Spaces in command names aren't handled very well (https://github.com/Chatterino/chatterino2/issues/1517).
 
-#### `register_callback("CompletionRequested", handler)`
+#### `register_callback(c2.EventType.CompletionRequested, handler)`
 
 Registers a callback (`handler`) to process completions. The callback takes a single table with the following entries:
 
@@ -189,7 +207,7 @@ function string.startswith(s, other)
 end
 
 c2.register_callback(
-    "CompletionRequested",
+    c2.EventType.CompletionRequested,
     function(event)
         if ("!join"):startswith(event.query) then
             ---@type CompletionList
@@ -200,15 +218,6 @@ c2.register_callback(
     end
 )
 ```
-
-#### `Platform` enum
-
-This table describes platforms that can be accessed. Chatterino supports IRC
-however plugins do not yet have explicit access to get IRC channels objects.
-The values behind the names may change, do not count on them. It has the
-following keys:
-
-- `Twitch`
 
 #### `ChannelType` enum
 
@@ -242,9 +251,9 @@ used on non-Twitch channels. Special channels while marked as
 is an actual Twitch chatroom use `Channel:get_type()` instead of
 `Channel:is_twitch_channel()`.
 
-##### `Channel:by_name(name, platform)`
+##### `Channel:by_name(name)`
 
-Finds a channel given by `name` on `platform` (see [`Platform` enum](#Platform-enum)). Returns the channel or `nil` if not open.
+Finds a channel given by `name`. Returns the channel or `nil` if not open.
 
 Some miscellaneous channels are marked as if they are specifically Twitch channels:
 
@@ -257,7 +266,7 @@ Some miscellaneous channels are marked as if they are specifically Twitch channe
 Example:
 
 ```lua
-local pajladas = c2.Channel.by_name("pajlada", c2.Platform.Twitch)
+local pajladas = c2.Channel.by_name("pajlada")
 ```
 
 ##### `Channel:by_twitch_id(id)`
@@ -341,11 +350,29 @@ Example:
 pajladas:add_system_message("Hello, world!")
 ```
 
+#### `Channel:add_message(message[, context[, override_flags]])`
+
+Add a rich message to a channel. The message can be created with [`Message.new`](#messagenewdata).
+
+Example:
+
+```lua
+channel:add_message(c2.Message.new({
+    id = "myplugin-1234",
+    elements = {
+        {
+            type = "text",
+            text = "Hello, World!",
+        }
+    }
+}))
+```
+
 ##### `Channel:is_twitch_channel()`
 
 Returns `true` if the channel is a Twitch channel, that is its type name has
 the `Twitch` prefix. This returns `true` for special channels like Mentions.
-You might want `Channel:get_type() == "Twitch"` if you want to use
+You might want `Channel:get_type() == c2.ChannelType.Twitch` if you want to use
 Twitch-specific functions.
 
 ##### `Channel:get_twitch_id()`
@@ -369,6 +396,166 @@ Returns `true` if the channel can be moderated by the current user.
 ##### `Channel:is_vip()`
 
 Returns `true` if the current user is a VIP in the channel.
+
+#### `HTTPMethod` enum
+
+This table describes HTTP methods available to Lua Plugins. The values behind
+the names may change, do not count on them. It has the following keys:
+
+- `Get`
+- `Post`
+- `Put`
+- `Delete`
+- `Patch`
+
+#### `HTTPResponse`
+
+An `HTTPResponse` is a table you receive in the callback after a completed `HTTPRequest`.
+
+##### `HTTPResponse.data()`
+
+This function returns the data received from the server as a string. Usually
+this will be UTF-8-encoded however that is not guaranteed, this could be any
+binary data.
+
+##### `HTTPResponse.error()`
+
+If an error happened this function returns a human readable description of it.
+
+It returns something like: `"ConnectionRefusedError"`, `"401"`.
+
+##### `HTTPResponse.status()`
+
+This function returns the HTTP status code of the request or `nil` if there was
+an error before a status code could be received.
+
+#### `HTTPRequest`
+
+Allows you to send an HTTP request to a URL. Do not create requests that you
+don't want to call `execute()` on. For the time being that leaks callback
+functions and all their upvalues with them.
+
+##### `HTTPRequest.create(method, url)`
+
+Creates a new `HTTPRequest`. The `method` argument is an
+[`HTTPMethod`](#HTTPMethod-enum). The `url` argument must be a string
+containing a valid URL (ex. `https://example.com/path/to/api`).
+
+```lua
+local req = c2.HTTPRequest.create(c2.HTTPMethod.Get, "https://example.com")
+req:on_success(function (res)
+    print(res:data())
+end)
+req:execute()
+```
+
+##### `HTTPRequest:on_success(callback)`
+
+Sets the success callback. It accepts a function that takes a single parameter
+of type `HTTPResponse`. The callback will be called on success. This function
+returns nothing.
+
+##### `HTTPRequest:on_error(callback)`
+
+Sets the error callback. It accepts a function that takes a single parameter of
+type `HTTPResponse`. The callback will be called if the request fails. To see why
+it failed check the `error` field of the result. This function returns nothing.
+
+##### `HTTPRequest:finally(callback)`
+
+Sets the finally callback. It accepts a function that takes no parameters and
+returns nothing. It will be always called after `success` or `error`. This
+function returns nothing.
+
+##### `HTTPRequest:set_timeout(timeout)`
+
+Sets how long the request will take before it times out. The `timeout`
+parameter is in milliseconds. This function returns nothing.
+
+##### `HTTPRequest:set_payload(data)`
+
+Sets the data that will be sent with the request. The `data` parameter must be
+a string. This function returns nothing.
+
+##### `HTTPRequest:set_header(name, value)`
+
+Adds or overwrites a header in the request. Both `name` and `value` should be
+strings. If they are not strings they will be converted to strings. This
+function returns nothing.
+
+##### `HTTPRequest:execute()`
+
+Sends the request. This function returns nothing.
+
+```lua
+local url = "http://localhost:8080/thing"
+local request = c2.HTTPRequest.create(c2.HTTPMethod.Post, url)
+request:set_timeout(1000)
+request:set_payload("TEST!")
+request:set_header("X-Test", "Testing!")
+request:set_header("Content-Type", "text/plain")
+request:on_success(function (res)
+    print('Success!')
+    -- Data is in res.data
+    print(res:status())
+end)
+request:on_error(function (res)
+    print('Error!')
+    print(res:status())
+    print(res:error())
+end)
+request:finally(function ()
+    print('Finally')
+end)
+request:execute()
+
+-- This prints:
+-- Success!
+-- [content of /thing]
+-- 200
+-- Finally
+
+-- Or:
+-- Error!
+-- nil
+-- ConnectionRefusedError
+```
+
+#### `Message`
+
+Allows creation of rich chat messages. This is currently limited but is expected to be expanded soon.
+
+##### `Message.new(data)`
+
+Creates a new message from a table. The message can be added to a channel using
+[`Channel:add_message`](#channeladd_messagemessage-context-override_flags):
+
+```lua
+c2.register_command("/testing", function(ctx)
+    ctx.channel:add_message(c2.Message.new({
+        id = "myplugin-1234",
+        highlight_color = "#80ff0000",
+        flags = c2.MessageFlag.Highlighted,
+        elements = {
+            {
+                type = "text",
+                color = "link",
+                text = "Hover me!",
+                tooltip = "<h1>This is text from my plugin</h1>"
+            },
+            {
+                type = "mention",
+                display_name = "@User",
+                login_name = "twitchdev",
+                fallback_color = "text",
+                user_color = "blue",
+            }
+        }
+    }))
+end)
+```
+
+The full range of options can be found in the typing files ([LuaLS](./plugin-meta.lua), [TypeScript](./chatterino.d.ts)).
 
 ### Input/Output API
 

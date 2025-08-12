@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 This script generates docs/plugin-meta.lua. It accepts no arguments
 
@@ -26,6 +27,14 @@ Valid commands are:
     @lua@class and @lua@field have special treatment when it comes to generation of spacing new lines
 
 Non-command lines of comments are written with a space after '---'
+
+To insert larger fragments of documentation, comments like
+/* @lua-fragment
+---@class foo
+...
+*/
+will be inserted as-is. These only work in the top-level scope. They don't work
+for class bodies.
 """
 
 from io import TextIOWrapper
@@ -41,7 +50,6 @@ BOILERPLATE = """
 -- Add the folder this file is in to "Lua.workspace.library".
 
 c2 = {}
-
 """
 
 repo_root = Path(__file__).parent.parent
@@ -55,8 +63,16 @@ def strip_line(line: str):
     return re.sub(r"^/\*\*|^\*|\*/$", "", line).strip()
 
 
+def strip_comments(line: str):
+    return re.sub(r"//.*|/\*.*?\*/", "", line).strip()
+
+
 def is_comment_start(line: str):
     return line.startswith("/**")
+
+
+def is_fragment_start(line: str):
+    return line.startswith("/* @lua-fragment")
 
 
 def is_enum_class(line: str):
@@ -96,20 +112,26 @@ class Reader:
             return self.lines[self.line_idx - 1].strip()
         return None
 
-    def next_doc_comment(self) -> Optional[list[str]]:
+    def next_item(self) -> list[str] | str | None:
+        """Finds the next documentation comment or fragment and advances the cursor"""
+        # find the start
+        while (line := self.next_line()) is not None:
+            if is_comment_start(line):
+                return self._read_doc_comment(line)
+            elif is_fragment_start(line):
+                return self._read_fragment()
+
+        return None
+
+    def _read_doc_comment(self, starting_line: str) -> Optional[list[str]]:
         """Reads a documentation comment (/** ... */) and advances the cursor"""
         lines = []
-        # find the start
-        while (line := self.next_line()) is not None and not is_comment_start(line):
-            pass
-        if line is None:
-            return None
-
+        line = starting_line
         stripped = strip_line(line)
         if stripped:
             lines.append(stripped)
 
-        if stripped.endswith("*/"):
+        if line.endswith("*/"):
             return lines if lines else None
 
         while (line := self.next_line()) is not None:
@@ -131,17 +153,31 @@ class Reader:
 
         return lines if lines else None
 
+    def _read_fragment(self) -> Optional[str]:
+        """Reads an inline fragment comment (/* @lua-fragment ... */) and advances the cursor"""
+
+        body = ""
+        while (line := self.next_line()) is not None:
+            if line.endswith("*/"):
+                break
+            body += "\n" + line
+
+        return body
+
     def read_class_body(self) -> list[list[str]]:
         """The reader must be at the first line of the class/struct body. All comments inside the class are returned."""
         items = []
+        nesting = -1  # for the opening brace
         while (line := self.peek_line()) is not None:
-            if line.startswith("};"):
+            if line.startswith("};") and nesting == 0:
                 self.next_line()
                 break
             if not is_comment_start(line):
+                nesting += line.count("{") - line.count("}")
                 self.next_line()
                 continue
-            doc = self.next_doc_comment()
+            doc = self.next_item()
+            assert not isinstance(doc, str), "Fragment inside class body found"
             if not doc:
                 break
             items.append(doc)
@@ -151,6 +187,7 @@ class Reader:
         """The reader must be before an enum class definition (possibly with some comments before). It returns all variants."""
         items = []
         is_comment = False
+        waiting_for_end = False
         while (line := self.peek_line()) is not None and not line.startswith("};"):
             self.next_line()
             if is_comment:
@@ -173,7 +210,16 @@ class Reader:
             if line.startswith("enum class"):
                 continue
 
-            items.append(line.rstrip(","))
+            if waiting_for_end:
+                if line.endswith(","):
+                    waiting_for_end = False
+                continue
+            m = re.match(r"^([\w_]+)", line)
+            if not m:
+                continue
+
+            items.append(m.group(1))
+            waiting_for_end = not strip_comments(line).endswith(",")
 
         return items
 
@@ -195,7 +241,7 @@ def write_func(path: Path, line: int, comments: list[str], out: TextIOWrapper):
     if not comments[0].startswith("@"):
         out.write(f"--- {comments[0]}\n---\n")
         comments = comments[1:]
-    params = []
+    params: list[str] = []
     for comment in comments[:-1]:
         if not comment.startswith("@lua"):
             panic(path, line, f"Invalid function specification - got '{comment}'")
@@ -208,8 +254,27 @@ def write_func(path: Path, line: int, comments: list[str], out: TextIOWrapper):
         panic(path, line, f"Invalid function exposure - got '{comments[-1]}'")
     name = comments[-1].split(" ", 1)[1]
     printmsg(path, line, f"function {name}")
-    lua_params = ", ".join(params)
+    lua_params = ", ".join(p.removesuffix("?") for p in params)
     out.write(f"function {name}({lua_params}) end\n\n")
+
+
+def write_enum(
+    name: str,
+    description: str | None,
+    variants: list[str],
+    is_flags: bool,
+    out: TextIOWrapper,
+):
+    if description:
+        out.write(f"--- {description}\n")
+    out.write(f"---@enum {name}\n")
+    out.write(f"{name} = {{\n")
+
+    def value(variant):
+        return "0," if is_flags else f"{{}}, ---@type {name}.{variant}"
+
+    out.write("\n".join([f"    {variant} = {value(variant)}" for variant in variants]))
+    out.write("\n}\n\n")
 
 
 def read_file(path: Path, out: TextIOWrapper):
@@ -219,9 +284,14 @@ def read_file(path: Path, out: TextIOWrapper):
 
     reader = Reader(lines)
     while reader.has_next():
-        doc_comment = reader.next_doc_comment()
+        doc_comment = reader.next_item()
         if not doc_comment:
             break
+        elif isinstance(doc_comment, str):
+            out.write(doc_comment)
+            out.write("\n")
+            continue
+
         header_comment = None
         if not doc_comment[0].startswith("@"):
             if len(doc_comment) == 1:
@@ -231,21 +301,6 @@ def read_file(path: Path, out: TextIOWrapper):
         else:
             header = doc_comment
 
-        # include block
-        if header[0].startswith("@includefile "):
-            for comment in header:
-                if not comment.startswith("@includefile "):
-                    panic(
-                        path,
-                        reader.line_no(),
-                        f"Invalid include block - got line '{comment}'",
-                    )
-                filename = comment.split(" ", 1)[1]
-                out.write(f"-- Begin src/{filename}\n\n")
-                read_file(repo_root / "src" / filename, out)
-                out.write(f"-- End src/{filename}\n\n")
-            continue
-
         # enum
         if header[0].startswith("@exposeenum "):
             if len(header) > 1:
@@ -254,23 +309,27 @@ def read_file(path: Path, out: TextIOWrapper):
                     reader.line_no(),
                     f"Invalid enum exposure - one command expected, got {len(header)}",
                 )
-            name = header[0].split(" ", 1)[1]
-            printmsg(path, reader.line_no(), f"enum {name}")
-            out.write(f"---@alias {name} integer\n")
-            if header_comment:
-                out.write(f"--- {header_comment}\n")
-            out.write("---@type { ")
-            out.write(
-                ", ".join(
-                    [f"{variant}: {name}" for variant in reader.read_enum_variants()]
+            args = header[0].split(" ")[1:]
+            if len(args) < 1 or len(args) > 2:
+                panic(
+                    path,
+                    reader.line_no(),
+                    f"Invalid @exposeenum - expected 2 arguments, got {len(args)}",
                 )
+            name = args[0]
+            is_flags = len(args) >= 2 and args[1] == "[flags]"
+            printmsg(path, reader.line_no(), f"enum {name}")
+            write_enum(
+                name,
+                header_comment,
+                reader.read_enum_variants(),
+                is_flags,
+                out,
             )
-            out.write(" }\n")
-            out.write(f"{name} = {{}}\n\n")
             continue
 
         # class
-        if header[0].startswith("@lua@class "):
+        elif header[0].startswith("@lua@class "):
             name = header[0].split(" ", 1)[1]
             classname = name.split(":")[0].strip()
             printmsg(path, reader.line_no(), f"class {classname}")
@@ -311,11 +370,29 @@ def read_file(path: Path, out: TextIOWrapper):
             for func in funcs:
                 write_func(path, reader.line_no(), func, out)
             continue
-
         # global function
-        if header[-1].startswith("@exposed "):
+        elif header[-1].startswith("@exposed "):
             write_func(path, reader.line_no(), doc_comment, out)
             continue
+        else:
+            for comment in header:
+                inline_command(path, reader.line_no(), comment, out)
+
+
+def inline_command(path: Path, line: int, comment: str, out: TextIOWrapper):
+    if comment.startswith("@includefile "):
+        filename = comment.split(" ", 1)[1]
+        out.write(f"-- Begin src/{filename}\n\n")
+        read_file(repo_root / "src" / filename, out)
+        out.write(f"-- End src/{filename}\n\n")
+    elif comment.startswith("@lua@class"):
+        panic(
+            path,
+            line,
+            "Unexpected @lua@class command. @lua@class must be placed at the start of the comment block!",
+        )
+    elif comment.startswith("@lua@"):
+        out.write(f"---{comment.replace('@lua', '', 1)}\n")
 
 
 if __name__ == "__main__":

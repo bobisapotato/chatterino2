@@ -3,6 +3,7 @@
 #include "Application.hpp"
 #include "common/Literals.hpp"
 #include "common/QLogging.hpp"
+#include "common/Version.hpp"
 #include "providers/twitch/TwitchIrcServer.hpp"
 #include "singletons/Settings.hpp"
 #include "util/PostToThread.hpp"
@@ -55,8 +56,17 @@ bool isBroadcasterSoftwareActive()
     static bool shouldShowWarning = true;
 
     QProcess p;
-    p.start("pgrep", {"-xi", broadcastingBinaries().join("|")},
-            QIODevice::NotOpen);
+    if (Version::instance().isFlatpak())
+    {
+        p.start("flatpak-spawn",
+                {"--host", "pgrep", "-xi", broadcastingBinaries().join("|")},
+                QIODevice::NotOpen);
+    }
+    else
+    {
+        p.start("pgrep", {"-xi", broadcastingBinaries().join("|")},
+                QIODevice::NotOpen);
+    }
 
     if (p.waitForFinished(1000) && p.exitStatus() == QProcess::NormalExit)
     {
@@ -74,7 +84,7 @@ bool isBroadcasterSoftwareActive()
                 shouldShowTimeoutWarning = false;
 
                 postToThread([] {
-                    getApp()->twitch->addGlobalSystemMessage(
+                    getApp()->getTwitch()->addGlobalSystemMessage(
                         "Streamer Mode is set to Automatic, but pgrep timed "
                         "out. This can happen if your system lagged at the "
                         "wrong moment. If Streamer Mode continues to not work, "
@@ -94,7 +104,7 @@ bool isBroadcasterSoftwareActive()
                 shouldShowWarning = false;
 
                 postToThread([] {
-                    getApp()->twitch->addGlobalSystemMessage(
+                    getApp()->getTwitch()->addGlobalSystemMessage(
                         "Streamer Mode is set to Automatic, but pgrep is "
                         "missing. "
                         "Install it to fix the issue or set Streamer Mode to "
@@ -103,6 +113,12 @@ bool isBroadcasterSoftwareActive()
             }
         }
         break;
+    }
+
+    if (!p.waitForFinished(1000))
+    {
+        qCWarning(chatterinoStreamerMode) << "Force-killing pgrep";
+        p.kill();
     }
 
     return false;
@@ -137,7 +153,7 @@ bool isBroadcasterSoftwareActive()
     }
 
 #else
-#    warning Unsupported OS: Broadcasting software can't be detected
+#    warning Unsupported OS: Broadcasting software can\'t be detected
 #endif
     return false;
 }
@@ -152,8 +168,15 @@ class StreamerModePrivate
 {
 public:
     StreamerModePrivate(StreamerMode *parent_);
+    ~StreamerModePrivate();
+    StreamerModePrivate(const StreamerModePrivate &) = delete;
+    StreamerModePrivate(StreamerModePrivate &&) = delete;
+    StreamerModePrivate &operator=(const StreamerModePrivate &) = delete;
+    StreamerModePrivate &operator=(StreamerModePrivate &&) = delete;
 
     [[nodiscard]] bool isEnabled() const;
+
+    void start();
 
 private:
     void settingChanged(StreamerModeSetting value);
@@ -164,8 +187,8 @@ private:
     StreamerMode *parent_;
     pajlada::Signals::SignalHolder settingConnections_;
 
-    QTimer timer_;
     QThread thread_;
+    QTimer *timer_;
 
     std::atomic<bool> enabled_ = false;
     mutable std::atomic<uint8_t> timeouts_ = 0;
@@ -189,11 +212,28 @@ bool StreamerMode::isEnabled() const
     return this->private_->isEnabled();
 }
 
+bool StreamerMode::shouldHideModActions() const
+{
+    return getSettings()->streamerModeHideModActions && this->isEnabled();
+}
+
+bool StreamerMode::shouldHideRestrictedUsers() const
+{
+    return getSettings()->streamerModeHideRestrictedUsers && this->isEnabled();
+}
+
+void StreamerMode::start()
+{
+    this->private_->start();
+}
+
 StreamerModePrivate::StreamerModePrivate(StreamerMode *parent)
     : parent_(parent)
+    , timer_(new QTimer(&this->thread_))
 {
-    this->timer_.moveToThread(&this->thread_);
-    QObject::connect(&this->timer_, &QTimer::timeout, [this] {
+    this->thread_.setObjectName("StreamerMode");
+    this->timer_->moveToThread(&this->thread_);
+    QObject::connect(this->timer_, &QTimer::timeout, [this] {
         auto timeouts =
             this->timeouts_.fetch_add(1, std::memory_order::relaxed);
         if (timeouts < SKIPPED_TIMEOUTS)
@@ -216,7 +256,24 @@ StreamerModePrivate::StreamerModePrivate(StreamerMode *parent)
     QObject::connect(&this->thread_, &QThread::started, [this] {
         this->settingChanged(getSettings()->enableStreamerMode.getEnum());
     });
+}
+
+void StreamerModePrivate::start()
+{
     this->thread_.start();
+}
+
+StreamerModePrivate::~StreamerModePrivate()
+{
+    this->timer_->deleteLater();
+    this->timer_ = nullptr;
+    this->thread_.quit();
+    if (!this->thread_.wait(500))
+    {
+        qCWarning(chatterinoStreamerMode)
+            << "Failed waiting for thread, terminating it";
+        this->thread_.terminate();
+    }
 }
 
 bool StreamerModePrivate::isEnabled() const
@@ -244,24 +301,27 @@ void StreamerModePrivate::settingChanged(StreamerModeSetting value)
     }
     this->currentSetting_ = value;
 
+    // in all cases: timer_ must be invoked from the correct thread
     switch (this->currentSetting_)
     {
         case StreamerModeSetting::Disabled: {
             this->setEnabled(false);
-            this->timer_.stop();
+            QMetaObject::invokeMethod(this->timer_, &QTimer::stop);
         }
         break;
         case StreamerModeSetting::Enabled: {
             this->setEnabled(true);
-            this->timer_.stop();
+            QMetaObject::invokeMethod(this->timer_, &QTimer::stop);
         }
         break;
         case StreamerModeSetting::DetectStreamingSoftware: {
-            if (!this->timer_.isActive())
-            {
-                this->timer_.start(20s);
-                this->check();
-            }
+            QMetaObject::invokeMethod(this->timer_, [this] {
+                if (!this->timer_->isActive())
+                {
+                    this->timer_->start(20s);
+                    this->check();
+                }
+            });
         }
         break;
         default:

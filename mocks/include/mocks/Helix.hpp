@@ -7,6 +7,7 @@
 #include <QString>
 #include <QStringList>
 
+#include <functional>
 #include <vector>
 
 namespace chatterino::mock {
@@ -78,7 +79,7 @@ public:
 
     MOCK_METHOD(void, createClip,
                 (QString channelId, ResultCallback<HelixClip> successCallback,
-                 std::function<void(HelixClipError)> failureCallback,
+                 std::function<void(HelixClipError, QString)> failureCallback,
                  std::function<void()> finallyCallback),
                 (override));
 
@@ -119,12 +120,12 @@ public:
                  HelixFailureCallback failureCallback),
                 (override));
 
-    MOCK_METHOD(void, updateChannel,
-                (QString broadcasterId, QString gameId, QString language,
-                 QString title,
-                 std::function<void(NetworkResult)> successCallback,
-                 HelixFailureCallback failureCallback),
-                (override));
+    MOCK_METHOD(
+        void, updateChannel,
+        (QString broadcasterId, QString gameId, QString language, QString title,
+         std::function<void(NetworkResult)> successCallback,
+         (FailureCallback<HelixUpdateChannelError, QString> failureCallback)),
+        (override));
 
     MOCK_METHOD(void, manageAutoModMessages,
                 (QString userID, QString msgID, QString action,
@@ -326,6 +327,16 @@ public:
                  (FailureCallback<HelixBanUserError, QString> failureCallback)),
                 (override));  // /timeout, /ban
 
+    // /warn
+    // The extra parenthesis around the failure callback is because its type
+    // contains a comma
+    MOCK_METHOD(
+        void, warnUser,
+        (QString broadcasterID, QString moderatorID, QString userID,
+         QString reason, ResultCallback<> successCallback,
+         (FailureCallback<HelixWarnUserError, QString> failureCallback)),
+        (override));  // /warn
+
     // /w
     // The extra parenthesis around the failure callback is because its type
     // contains a comma
@@ -340,7 +351,7 @@ public:
     // contains a comma
     MOCK_METHOD(
         void, getChatters,
-        (QString broadcasterID, QString moderatorID, int maxChattersToFetch,
+        (QString broadcasterID, QString moderatorID, size_t maxChattersToFetch,
          ResultCallback<HelixChatters> successCallback,
          (FailureCallback<HelixGetChattersError, QString> failureCallback)),
         (override));  // getChatters
@@ -399,6 +410,37 @@ public:
          ResultCallback<HelixSentMessage> successCallback,
          (FailureCallback<HelixSendMessageError, QString> failureCallback)),
         (override));
+
+    // get user emotes
+    MOCK_METHOD(
+        void, getUserEmotes,
+        (QString userID, QString broadcasterID,
+         (ResultCallback<std::vector<HelixChannelEmote>, HelixPaginationState>
+              successCallback),
+         FailureCallback<QString> failureCallback, CancellationToken &&token),
+        (override));
+
+    // get followed channel
+    MOCK_METHOD(
+        void, getFollowedChannel,
+        (QString userID, QString broadcasterID, const QObject *caller,
+         ResultCallback<std::optional<HelixFollowedChannel>> successCallback,
+         FailureCallback<QString> failureCallback),
+        (override));
+
+    MOCK_METHOD(void, createEventSubSubscription,
+                (const eventsub::SubscriptionRequest &request,
+                 const QString &sessionID,
+                 ResultCallback<HelixCreateEventSubSubscriptionResponse>
+                     successCallback,
+                 (FailureCallback<HelixCreateEventSubSubscriptionError, QString>
+                      failureCallback)),
+                (override));
+
+    MOCK_METHOD(void, deleteEventSubSubscription,
+                (const QString &request, ResultCallback<> successCallback,
+                 (FailureCallback<QString> failureCallback)),
+                (override));
 
     MOCK_METHOD(void, update, (QString clientId, QString oauthToken),
                 (override));

@@ -3,22 +3,10 @@
 #include "Application.hpp"
 #include "messages/Message.hpp"
 #include "messages/MessageBuilder.hpp"
-#include "providers/irc/IrcChannel2.hpp"
-#include "providers/irc/IrcServer.hpp"
-#include "providers/twitch/IrcMessageHandler.hpp"
-#include "singletons/Emotes.hpp"
+#include "messages/MessageSimilarity.hpp"
 #include "singletons/Logging.hpp"
 #include "singletons/Settings.hpp"
-#include "singletons/WindowManager.hpp"
 #include "util/ChannelHelpers.hpp"
-
-#include <QJsonArray>
-#include <QJsonDocument>
-#include <QJsonObject>
-#include <QJsonValue>
-#include <QNetworkAccessManager>
-#include <QNetworkReply>
-#include <QNetworkRequest>
 
 namespace chatterino {
 
@@ -26,16 +14,25 @@ namespace chatterino {
 // Channel
 //
 Channel::Channel(const QString &name, Type type)
-    : completionModel(*this, nullptr)
+    : completionModel(new TabCompletionModel(*this, nullptr))
     , lastDate_(QDate::currentDate())
     , name_(name)
     , messages_(getSettings()->scrollbackSplitLimit)
     , type_(type)
 {
+    if (this->isTwitchChannel())
+    {
+        this->platform_ = "twitch";
+    }
 }
 
 Channel::~Channel()
 {
+    auto *app = tryGetApp();
+    if (app && this->anythingLogged_)
+    {
+        app->getChatLogger()->closeChannel(this->name_, this->platform_);
+    }
     this->destroyed.invoke();
 }
 
@@ -79,29 +76,28 @@ LimitedQueueSnapshot<MessagePtr> Channel::getMessageSnapshot()
     return this->messages_.getSnapshot();
 }
 
-void Channel::addMessage(MessagePtr message,
+void Channel::addMessage(MessagePtr message, MessageContext context,
                          std::optional<MessageFlags> overridingFlags)
 {
+    message->freeze();
+
     MessagePtr deleted;
 
-    if (!overridingFlags || !overridingFlags->has(MessageFlag::DoNotLog))
+    if (context == MessageContext::Original && this->getType() != Type::None)
     {
-        QString channelPlatform("other");
-        if (this->type_ == Type::Irc)
+        // Only log original messages
+        auto isDoNotLogSet =
+            (overridingFlags && overridingFlags->has(MessageFlag::DoNotLog)) ||
+            message->flags.has(MessageFlag::DoNotLog);
+
+        if (!isDoNotLogSet)
         {
-            auto *irc = dynamic_cast<IrcChannel *>(this);
-            if (irc != nullptr)
-            {
-                channelPlatform = QString("irc-%1").arg(
-                    irc->server()->userFriendlyIdentifier());
-            }
+            // Only log messages where the `DoNotLog` flag is not set
+            getApp()->getChatLogger()->addMessage(this->name_, message,
+                                                  this->platform_,
+                                                  this->getCurrentStreamID());
+            this->anythingLogged_ = true;
         }
-        else if (this->isTwitchChannel())
-        {
-            channelPlatform = "twitch";
-        }
-        getIApp()->getChatLogger()->addMessage(this->name_, message,
-                                               channelPlatform);
     }
 
     if (this->messages_.pushBack(message, deleted))
@@ -112,20 +108,35 @@ void Channel::addMessage(MessagePtr message,
     this->messageAppended.invoke(message, overridingFlags);
 }
 
-void Channel::addOrReplaceTimeout(MessagePtr message)
+void Channel::addSystemMessage(const QString &contents)
+{
+    auto msg = makeSystemMessage(contents);
+    this->addMessage(msg, MessageContext::Original);
+}
+
+void Channel::addOrReplaceTimeout(MessagePtr message, const QDateTime &now)
 {
     addOrReplaceChannelTimeout(
-        this->getMessageSnapshot(), std::move(message), QTime::currentTime(),
+        this->getMessageSnapshot(), std::move(message), now,
         [this](auto /*idx*/, auto msg, auto replacement) {
             this->replaceMessage(msg, replacement);
         },
         [this](auto msg) {
-            this->addMessage(msg);
+            this->addMessage(msg, MessageContext::Original);
         },
         true);
+}
 
-    // XXX: Might need the following line
-    // WindowManager::instance().repaintVisibleChatWidgets(this);
+void Channel::addOrReplaceClearChat(MessagePtr message, const QDateTime &now)
+{
+    addOrReplaceChannelClear(
+        this->getMessageSnapshot(), std::move(message), now,
+        [this](auto /*idx*/, auto msg, auto replacement) {
+            this->replaceMessage(msg, replacement);
+        },
+        [this](auto msg) {
+            this->addMessage(msg, MessageContext::Original);
+        });
 }
 
 void Channel::disableAllMessages()
@@ -148,6 +159,11 @@ void Channel::disableAllMessages()
 
 void Channel::addMessagesAtStart(const std::vector<MessagePtr> &_messages)
 {
+    for (const auto &msg : _messages)
+    {
+        msg->freeze();
+    }
+
     std::vector<MessagePtr> addedMessages =
         this->messages_.pushFront(_messages);
 
@@ -162,6 +178,10 @@ void Channel::fillInMissingMessages(const std::vector<MessagePtr> &messages)
     if (messages.empty())
     {
         return;
+    }
+    for (const auto &msg : messages)
+    {
+        msg->freeze();
     }
 
     auto snapshot = this->getMessageSnapshot();
@@ -244,38 +264,61 @@ void Channel::fillInMissingMessages(const std::vector<MessagePtr> &messages)
     }
 }
 
-void Channel::replaceMessage(MessagePtr message, MessagePtr replacement)
+void Channel::replaceMessage(const MessagePtr &message,
+                             const MessagePtr &replacement)
 {
+    replacement->freeze();
     int index = this->messages_.replaceItem(message, replacement);
 
     if (index >= 0)
     {
-        this->messageReplaced.invoke((size_t)index, replacement);
+        this->messageReplaced.invoke((size_t)index, message, replacement);
     }
 }
 
-void Channel::replaceMessage(size_t index, MessagePtr replacement)
+void Channel::replaceMessage(size_t index, const MessagePtr &replacement)
 {
-    if (this->messages_.replaceItem(index, replacement))
+    replacement->freeze();
+
+    MessagePtr prev;
+    if (this->messages_.replaceItem(index, replacement, &prev))
     {
-        this->messageReplaced.invoke(index, replacement);
+        this->messageReplaced.invoke(index, prev, replacement);
     }
 }
 
-void Channel::deleteMessage(QString messageID)
+void Channel::replaceMessage(size_t hint, const MessagePtr &message,
+                             const MessagePtr &replacement)
 {
-    auto msg = this->findMessage(messageID);
+    replacement->freeze();
+
+    auto index = this->messages_.replaceItem(hint, message, replacement);
+    if (index >= 0)
+    {
+        this->messageReplaced.invoke(hint, message, replacement);
+    }
+}
+
+void Channel::disableMessage(const QString &messageID)
+{
+    auto msg = this->findMessageByID(messageID);
     if (msg != nullptr)
     {
         msg->flags.set(MessageFlag::Disabled);
     }
 }
 
-MessagePtr Channel::findMessage(QString messageID)
+void Channel::clearMessages()
+{
+    this->messages_.clear();
+    this->messagesCleared.invoke();
+}
+
+MessagePtr Channel::findMessageByID(QStringView messageID)
 {
     MessagePtr res;
 
-    if (auto msg = this->messages_.rfind([&messageID](const MessagePtr &msg) {
+    if (auto msg = this->messages_.rfind([messageID](const MessagePtr &msg) {
             return msg->id == messageID;
         });
         msg)
@@ -284,6 +327,19 @@ MessagePtr Channel::findMessage(QString messageID)
     }
 
     return res;
+}
+
+void Channel::applySimilarityFilters(const MessagePtr &message) const
+{
+    setSimilarityFlags(message, this->messages_.getSnapshot());
+}
+
+MessageSinkTraits Channel::sinkTraits() const
+{
+    return {
+        MessageSinkTrait::AddMentionsToGlobalChannel,
+        MessageSinkTrait::RequiresKnownChannelPointReward,
+    };
 }
 
 bool Channel::canSendMessage() const
@@ -349,6 +405,11 @@ void Channel::reconnect()
 {
 }
 
+QString Channel::getCurrentStreamID() const
+{
+    return {};
+}
+
 std::shared_ptr<Channel> Channel::getEmpty()
 {
     static std::shared_ptr<Channel> channel(new Channel("", Type::None));
@@ -395,16 +456,14 @@ pajlada::Signals::NoArgSignal &IndirectChannel::getChannelChanged()
     return this->data_->changed;
 }
 
-Channel::Type IndirectChannel::getType()
+Channel::Type IndirectChannel::getType() const
 {
     if (this->data_->type == Channel::Type::Direct)
     {
         return this->get()->getType();
     }
-    else
-    {
-        return this->data_->type;
-    }
+
+    return this->data_->type;
 }
 
 }  // namespace chatterino

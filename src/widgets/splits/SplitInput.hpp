@@ -19,9 +19,11 @@ namespace chatterino {
 class Split;
 class EmotePopup;
 class InputCompletionPopup;
-class EffectLabel;
+class MessageView;
+class LabelButton;
 class ResizingTextEdit;
 class ChannelView;
+class SvgButton;
 enum class CompletionKind;
 
 class SplitInput : public BaseWidget
@@ -40,7 +42,7 @@ public:
     QString getInputText() const;
     void insertText(const QString &text);
 
-    void setReply(MessagePtr reply, bool showInlineReplying = true);
+    void setReply(MessagePtr target);
     void setPlaceholderText(const QString &text);
 
     /**
@@ -91,7 +93,7 @@ protected:
     void postMessageSend(const QString &message,
                          const std::vector<QString> &arguments);
 
-    /// Clears the input box, clears reply thread if inline replies are enabled
+    /// Clears the input box, clears reply target if inline replies are enabled
     void clearInput();
 
     void addShortcuts() override;
@@ -109,6 +111,7 @@ protected:
     void hideCompletionPopup();
     void insertCompletionText(const QString &input_) const;
     void openEmotePopup();
+    void clearReplyTarget();
 
     void updateCancelReplyButton();
 
@@ -120,27 +123,39 @@ protected:
     // the user's setting is set to Prevent, and the given text goes beyond the Twitch message length limit
     bool shouldPreventInput(const QString &text) const;
 
+    int marginForTheme() const;
+
+    void applyOuterMargin();
+
+    int replyMessageWidth() const;
+
     Split *const split_;
     ChannelView *const channelView_;
     QPointer<EmotePopup> emotePopup_;
     QPointer<InputCompletionPopup> inputCompletionPopup_;
 
     struct {
-        ResizingTextEdit *textEdit;
-        QLabel *textEditLength;
-        EffectLabel *sendButton;
-        EffectLabel *emoteButton;
-
-        QHBoxLayout *hbox;
+        // vbox for all components
         QVBoxLayout *vbox;
 
+        // reply widgets
         QWidget *replyWrapper;
+        QVBoxLayout *replyVbox;
         QHBoxLayout *replyHbox;
+        MessageView *replyMessage;
         QLabel *replyLabel;
-        EffectLabel *cancelReplyButton;
-    } ui_{};
+        SvgButton *cancelReplyButton;
 
-    MessagePtr replyThread_ = nullptr;
+        // input widgets
+        QWidget *inputWrapper;
+        QHBoxLayout *inputHbox;
+        ResizingTextEdit *textEdit;
+        QLabel *textEditLength;
+        LabelButton *sendButton;
+        SvgButton *emoteButton;
+    } ui_;
+
+    MessagePtr replyTarget_ = nullptr;
     bool enableInlineReplying_;
 
     pajlada::Signals::SignalHolder managedConnections_;
@@ -154,7 +169,7 @@ protected:
     // set the height of the split input to 0 if we're supposed to be hidden instead
     bool hidden{false};
 
-private slots:
+private Q_SLOTS:
     void editTextChanged();
 
     friend class Split;

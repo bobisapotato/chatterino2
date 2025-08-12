@@ -1,4 +1,4 @@
-#include "SettingsPage.hpp"
+#include "widgets/settingspages/SettingsPage.hpp"
 
 #include "Application.hpp"
 #include "singletons/WindowManager.hpp"
@@ -88,9 +88,11 @@ void SettingsPage::setTab(SettingsDialogTab *tab)
 }
 
 QCheckBox *SettingsPage::createCheckBox(
-    const QString &text, pajlada::Settings::Setting<bool> &setting)
+    const QString &text, pajlada::Settings::Setting<bool> &setting,
+    const QString &toolTipText)
 {
     QCheckBox *checkbox = new SCheckBox(text);
+    checkbox->setToolTip(toolTipText);
 
     // update when setting changes
     setting.connect(
@@ -103,7 +105,7 @@ QCheckBox *SettingsPage::createCheckBox(
     QObject::connect(checkbox, &QCheckBox::toggled, this,
                      [&setting](bool state) {
                          setting = state;
-                         getIApp()->getWindows()->forceLayoutChannelViews();
+                         getApp()->getWindows()->forceLayoutChannelViews();
                      });
 
     return checkbox;
@@ -130,22 +132,6 @@ QComboBox *SettingsPage::createComboBox(
                      });
 
     return combo;
-}
-
-QLineEdit *SettingsPage::createLineEdit(
-    pajlada::Settings::Setting<QString> &setting)
-{
-    QLineEdit *edit = new QLineEdit();
-
-    edit->setText(setting);
-
-    // update when setting changes
-    QObject::connect(edit, &QLineEdit::textChanged,
-                     [&setting](const QString &newValue) {
-                         setting = newValue;
-                     });
-
-    return edit;
 }
 
 QSpinBox *SettingsPage::createSpinBox(pajlada::Settings::Setting<int> &setting,

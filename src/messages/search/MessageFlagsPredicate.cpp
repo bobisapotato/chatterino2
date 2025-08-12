@@ -1,7 +1,5 @@
 #include "messages/search/MessageFlagsPredicate.hpp"
 
-#include "util/Qt.hpp"
-
 namespace chatterino {
 
 MessageFlagsPredicate::MessageFlagsPredicate(const QString &flags, bool negate)
@@ -59,6 +57,10 @@ MessageFlagsPredicate::MessageFlagsPredicate(const QString &flags, bool negate)
         else if (flag == "monitored")
         {
             this->flags_.set(MessageFlag::MonitoredMessage);
+        }
+        else if (flag == "shared")
+        {
+            this->flags_.set(MessageFlag::SharedMessage);
         }
     }
 }

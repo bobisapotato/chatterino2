@@ -3,10 +3,15 @@
 #include "common/Aliases.hpp"
 #include "common/Atomic.hpp"
 
+#include <pajlada/signals/scoped-connection.hpp>
 #include <QJsonObject>
+#include <QString>
 
+#include <functional>
 #include <memory>
 #include <optional>
+#include <utility>
+#include <vector>
 
 namespace chatterino {
 
@@ -19,8 +24,8 @@ struct BttvLiveUpdateEmoteRemoveMessage;
 
 namespace bttv::detail {
 
-    EmoteMap parseChannelEmotes(const QJsonObject &jsonRoot,
-                                const QString &channelDisplayName);
+EmoteMap parseChannelEmotes(const QJsonObject &jsonRoot,
+                            const QString &channelDisplayName);
 
 }  // namespace bttv::detail
 
@@ -42,7 +47,7 @@ public:
                             const QString &channelId,
                             const QString &channelDisplayName,
                             std::function<void(EmoteMap &&)> callback,
-                            bool manualRefresh);
+                            bool manualRefresh, bool cacheHit);
 
     /**
      * Adds an emote to the `channelEmoteMap`.
@@ -81,6 +86,9 @@ public:
 
 private:
     Atomic<std::shared_ptr<const EmoteMap>> global_;
+
+    std::vector<std::unique_ptr<pajlada::Signals::ScopedConnection>>
+        managedConnections;
 };
 
 }  // namespace chatterino

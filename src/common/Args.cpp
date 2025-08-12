@@ -117,6 +117,13 @@ Args::Args(const QApplication &app, const Paths &paths)
         "safe-mode", "Starts Chatterino without loading Plugins and always "
                      "show the settings button.");
 
+    QCommandLineOption loginOption(
+        "login",
+        "Starts Chatterino logged in as the account matching the supplied "
+        "username. If the supplied username does not match any account "
+        "Chatterino starts logged in as anonymous.",
+        "username");
+
     // Channel layout
     auto channelLayout = QCommandLineOption(
         {"c", "channels"},
@@ -133,6 +140,12 @@ Args::Args(const QApplication &app, const Paths &paths)
         "specified, Twitch is assumed.",
         "t:channel");
 
+#ifndef NDEBUG
+    QCommandLineOption useLocalEventsubOption(
+        "use-local-eventsub",
+        "Use the local eventsub server at 127.0.0.1:3012.");
+#endif
+
     parser.addOptions({
         {{"V", "version"}, "Displays version information."},
         crashRecoveryOption,
@@ -142,8 +155,12 @@ Args::Args(const QApplication &app, const Paths &paths)
         parentWindowIdOption,
         verboseOption,
         safeModeOption,
+        loginOption,
         channelLayout,
         activateOption,
+#ifndef NDEBUG
+        useLocalEventsubOption,
+#endif
     });
 
     if (!parser.parse(app.arguments()))
@@ -197,15 +214,28 @@ Args::Args(const QApplication &app, const Paths &paths)
         this->safeMode = true;
     }
 
+    if (parser.isSet(loginOption))
+    {
+        this->initialLogin = parser.value(loginOption);
+    }
+
     if (parser.isSet(activateOption))
     {
         this->activateChannel =
             parseActivateOption(parser.value(activateOption));
     }
 
+#ifndef NDEBUG
+    if (parser.isSet(useLocalEventsubOption))
+    {
+        this->useLocalEventsub = true;
+    }
+#endif
+
     this->currentArguments_ = extractCommandLine(parser, {
                                                              verboseOption,
                                                              safeModeOption,
+                                                             loginOption,
                                                              channelLayout,
                                                              activateOption,
                                                          });

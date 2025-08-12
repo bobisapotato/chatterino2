@@ -16,8 +16,9 @@
 
 namespace chatterino {
 
-class Button;
-class EffectLabel;
+class DrawnButton;
+class PixmapButton;
+class LabelButton;
 class Label;
 class Split;
 
@@ -54,7 +55,6 @@ protected:
 
 private:
     void initializeLayout();
-    void initializeModeSignals(EffectLabel &label);
     std::unique_ptr<QMenu> createMainMenu();
     std::unique_ptr<QMenu> createChatModeMenu();
 
@@ -76,19 +76,19 @@ private:
     std::chrono::steady_clock::time_point lastReloadedSubEmotes_;
 
     // ui
-    Button *dropdownButton_{};
+    DrawnButton *dropdownButton_{};
     Label *titleLabel_{};
 
-    EffectLabel *modeButton_{};
+    LabelButton *modeButton_{};
     QAction *modeActionSetEmote{};
     QAction *modeActionSetSub{};
     QAction *modeActionSetSlow{};
     QAction *modeActionSetR9k{};
     QAction *modeActionSetFollowers{};
 
-    Button *moderationButton_{};
-    Button *chattersButton_{};
-    Button *addButton_{};
+    PixmapButton *moderationButton_{};
+    PixmapButton *chattersButton_{};
+    DrawnButton *addButton_{};
 
     // states
     QPoint dragStart_{};
@@ -102,7 +102,7 @@ private:
     pajlada::Signals::SignalHolder channelConnections_;
     std::vector<boost::signals2::scoped_connection> bSignals_;
 
-public slots:
+public Q_SLOTS:
     void reloadChannelEmotes();
     void reloadSubscriberEmotes();
     void reconnect();

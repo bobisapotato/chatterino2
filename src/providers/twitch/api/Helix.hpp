@@ -2,6 +2,7 @@
 
 #include "common/Aliases.hpp"
 #include "common/network/NetworkRequest.hpp"
+#include "providers/twitch/eventsub/SubscriptionRequest.hpp"
 #include "providers/twitch/TwitchEmotes.hpp"
 #include "util/Helpers.hpp"
 #include "util/QStringHash.hpp"
@@ -11,6 +12,7 @@
 #include <QJsonObject>
 #include <QString>
 #include <QStringList>
+#include <QTimeZone>
 #include <QUrl>
 #include <QUrlQuery>
 
@@ -265,20 +267,18 @@ struct HelixEmoteSetData {
 };
 
 struct HelixChannelEmote {
-    const QString emoteId;
+    const QString id;
     const QString name;
     const QString type;
-    const QString setId;
-    const QString url;
+    const QString setID;
+    const QString ownerID;
 
-    explicit HelixChannelEmote(QJsonObject jsonObject)
-        : emoteId(jsonObject.value("id").toString())
-        , name(jsonObject.value("name").toString())
-        , type(jsonObject.value("emote_type").toString())
-        , setId(jsonObject.value("emote_set_id").toString())
-        , url(QString(TWITCH_EMOTE_TEMPLATE)
-                  .replace("{id}", this->emoteId)
-                  .replace("{scale}", "3.0"))
+    explicit HelixChannelEmote(const QJsonObject &jsonObject)
+        : id(jsonObject["id"].toString())
+        , name(jsonObject["name"].toString())
+        , type(jsonObject["emote_type"].toString())
+        , setID(jsonObject["emote_set_id"].toString())
+        , ownerID(jsonObject["owner_id"].toString())
     {
     }
 };
@@ -439,6 +439,22 @@ struct HelixSentMessage {
     }
 };
 
+struct HelixFollowedChannel {
+    QString broadcasterID;
+    QString broadcasterLogin;
+    QString broadcasterName;
+    QDateTime followedAt;
+
+    explicit HelixFollowedChannel(const QJsonObject &jsonObject)
+        : broadcasterID(jsonObject["broadcaster_id"].toString())
+        , broadcasterLogin(jsonObject["broadcaster_login"].toString())
+        , broadcasterName(jsonObject["broadcaster_name"].toString())
+        , followedAt(QDateTime::fromString(jsonObject["followed_at"].toString(),
+                                           Qt::ISODate))
+    {
+    }
+};
+
 struct HelixSendMessageArgs {
     QString broadcasterID;
     QString senderID;
@@ -459,7 +475,10 @@ enum class HelixAnnouncementColor {
 
 enum class HelixClipError {
     Unknown,
+    ClipsUnavailable,
     ClipsDisabled,
+    ClipsRestricted,
+    ClipsRestrictedCategory,
     UserNotAuthenticated,
 };
 
@@ -595,6 +614,19 @@ enum class HelixUpdateChatSettingsError {  // update chat settings
     Forwarded,
 };  // update chat settings
 
+/// Error type for Helix::updateChannel
+///
+/// Used in the /settitle and /setgame commands
+enum class HelixUpdateChannelError {
+    Unknown,
+    UserMissingScope,
+    UserNotAuthorized,
+    Ratelimited,
+
+    // The error message is forwarded directly from the Twitch API
+    Forwarded,
+};
+
 enum class HelixBanUserError {  // /timeout, /ban
     Unknown,
     UserMissingScope,
@@ -607,6 +639,18 @@ enum class HelixBanUserError {  // /timeout, /ban
     // The error message is forwarded directly from the Twitch API
     Forwarded,
 };  // /timeout, /ban
+
+enum class HelixWarnUserError {  // /warn
+    Unknown,
+    UserMissingScope,
+    UserNotAuthorized,
+    Ratelimited,
+    ConflictingOperation,
+    CannotWarnUser,
+
+    // The error message is forwarded directly from the Twitch API
+    Forwarded,
+};  // /warn
 
 enum class HelixWhisperError {  // /w
     Unknown,
@@ -699,7 +743,7 @@ struct HelixShieldModeStatus {
         , lastActivatedAt(QDateTime::fromString(
               json["last_activated_at"].toString(), Qt::ISODate))
     {
-        this->lastActivatedAt.setTimeSpec(Qt::UTC);
+        this->lastActivatedAt.setTimeZone(QTimeZone::utc());
     }
 };
 
@@ -762,6 +806,70 @@ struct HelixError {
 
 using HelixGetChannelBadgesError = HelixGetGlobalBadgesError;
 
+struct HelixPaginationState {
+    bool done;
+};
+
+struct HelixCreateEventSubSubscriptionResponse {
+    QString subscriptionID;
+    QString subscriptionStatus;
+    QString subscriptionType;
+    QString subscriptionVersion;
+    QJsonObject subscriptionCondition;
+    QString subscriptionCreatedAt;
+    QString subscriptionSessionID;
+    QString subscriptionConnectedAt;
+    int subscriptionCost;
+
+    int total;
+    int totalCost;
+    int maxTotalCost;
+
+    explicit HelixCreateEventSubSubscriptionResponse(
+        const QJsonObject &jsonObject)
+    {
+        {
+            auto jsonData = jsonObject.value("data").toArray().at(0).toObject();
+            this->subscriptionID = jsonData.value("id").toString();
+            this->subscriptionStatus = jsonData.value("status").toString();
+            this->subscriptionType = jsonData.value("type").toString();
+            this->subscriptionVersion = jsonData.value("version").toString();
+            this->subscriptionCondition =
+                jsonData.value("condition").toObject();
+            this->subscriptionCreatedAt =
+                jsonData.value("created_at").toString();
+            this->subscriptionSessionID = jsonData.value("transport")
+                                              .toObject()
+                                              .value("session_id")
+                                              .toString();
+            this->subscriptionConnectedAt = jsonData.value("transport")
+                                                .toObject()
+                                                .value("connected_at")
+                                                .toString();
+            this->subscriptionCost = jsonData.value("cost").toInt();
+        }
+
+        this->total = jsonObject.value("total").toInt();
+        this->totalCost = jsonObject.value("total_cost").toInt();
+        this->maxTotalCost = jsonObject.value("max_total_cost").toInt();
+    }
+
+    friend QDebug &operator<<(
+        QDebug &dbg, const HelixCreateEventSubSubscriptionResponse &data);
+};
+
+enum class HelixCreateEventSubSubscriptionError : std::uint8_t {
+    BadRequest,
+    Unauthorized,
+    Forbidden,
+    Conflict,
+    Ratelimited,
+    NoSession,
+
+    // The error message is forwarded directly from the Twitch API
+    Forwarded,
+};
+
 class IHelix
 {
 public:
@@ -820,10 +928,10 @@ public:
                              HelixFailureCallback failureCallback) = 0;
 
     // https://dev.twitch.tv/docs/api/reference#create-clip
-    virtual void createClip(QString channelId,
-                            ResultCallback<HelixClip> successCallback,
-                            std::function<void(HelixClipError)> failureCallback,
-                            std::function<void()> finallyCallback) = 0;
+    virtual void createClip(
+        QString channelId, ResultCallback<HelixClip> successCallback,
+        std::function<void(HelixClipError, QString)> failureCallback,
+        std::function<void()> finallyCallback) = 0;
 
     // https://dev.twitch.tv/docs/api/reference#get-channel-information
     virtual void fetchChannels(
@@ -862,7 +970,7 @@ public:
     virtual void updateChannel(
         QString broadcasterId, QString gameId, QString language, QString title,
         std::function<void(NetworkResult)> successCallback,
-        HelixFailureCallback failureCallback) = 0;
+        FailureCallback<HelixUpdateChannelError, QString> failureCallback) = 0;
 
     // https://dev.twitch.tv/docs/api/reference#manage-held-automod-messages
     virtual void manageAutoModMessages(
@@ -1011,6 +1119,13 @@ public:
         ResultCallback<> successCallback,
         FailureCallback<HelixBanUserError, QString> failureCallback) = 0;
 
+    // Warn a user
+    // https://dev.twitch.tv/docs/api/reference#warn-chat-user
+    virtual void warnUser(
+        QString broadcasterID, QString moderatorID, QString userID,
+        QString reason, ResultCallback<> successCallback,
+        FailureCallback<HelixWarnUserError, QString> failureCallback) = 0;
+
     // Send a whisper
     // https://dev.twitch.tv/docs/api/reference#send-whisper
     virtual void sendWhisper(
@@ -1022,7 +1137,7 @@ public:
     // This will follow the returned cursor and return up to `maxChattersToFetch` chatters
     // https://dev.twitch.tv/docs/api/reference#get-chatters
     virtual void getChatters(
-        QString broadcasterID, QString moderatorID, int maxChattersToFetch,
+        QString broadcasterID, QString moderatorID, size_t maxChattersToFetch,
         ResultCallback<HelixChatters> successCallback,
         FailureCallback<HelixGetChattersError, QString> failureCallback) = 0;
 
@@ -1080,6 +1195,33 @@ public:
         HelixSendMessageArgs args,
         ResultCallback<HelixSentMessage> successCallback,
         FailureCallback<HelixSendMessageError, QString> failureCallback) = 0;
+
+    /// https://dev.twitch.tv/docs/api/reference/#get-user-emotes
+    virtual void getUserEmotes(
+        QString userID, QString broadcasterID,
+        ResultCallback<std::vector<HelixChannelEmote>, HelixPaginationState>
+            pageCallback,
+        FailureCallback<QString> failureCallback,
+        CancellationToken &&token) = 0;
+
+    /// https://dev.twitch.tv/docs/api/reference/#get-followed-channels
+    /// (non paginated)
+    virtual void getFollowedChannel(
+        QString userID, QString broadcasterID, const QObject *caller,
+        ResultCallback<std::optional<HelixFollowedChannel>> successCallback,
+        FailureCallback<QString> failureCallback) = 0;
+
+    // https://dev.twitch.tv/docs/api/reference/#create-eventsub-subscription
+    virtual void createEventSubSubscription(
+        const eventsub::SubscriptionRequest &request, const QString &sessionID,
+        ResultCallback<HelixCreateEventSubSubscriptionResponse> successCallback,
+        FailureCallback<HelixCreateEventSubSubscriptionError, QString>
+            failureCallback) = 0;
+
+    // https://dev.twitch.tv/docs/api/reference/#delete-eventsub-subscription
+    virtual void deleteEventSubSubscription(
+        const QString &subscriptionID, ResultCallback<> successCallback,
+        FailureCallback<QString> failureCallback) = 0;
 
     virtual void update(QString clientId, QString oauthToken) = 0;
 
@@ -1141,10 +1283,10 @@ public:
                      HelixFailureCallback failureCallback) final;
 
     // https://dev.twitch.tv/docs/api/reference#create-clip
-    void createClip(QString channelId,
-                    ResultCallback<HelixClip> successCallback,
-                    std::function<void(HelixClipError)> failureCallback,
-                    std::function<void()> finallyCallback) final;
+    void createClip(
+        QString channelId, ResultCallback<HelixClip> successCallback,
+        std::function<void(HelixClipError, QString)> failureCallback,
+        std::function<void()> finallyCallback) final;
 
     // https://dev.twitch.tv/docs/api/reference#get-channel-information
     void fetchChannels(
@@ -1183,7 +1325,8 @@ public:
     void updateChannel(QString broadcasterId, QString gameId, QString language,
                        QString title,
                        std::function<void(NetworkResult)> successCallback,
-                       HelixFailureCallback failureCallback) final;
+                       FailureCallback<HelixUpdateChannelError, QString>
+                           failureCallback) final;
 
     // https://dev.twitch.tv/docs/api/reference#manage-held-automod-messages
     void manageAutoModMessages(
@@ -1332,6 +1475,13 @@ public:
         ResultCallback<> successCallback,
         FailureCallback<HelixBanUserError, QString> failureCallback) final;
 
+    // Warn a user
+    // https://dev.twitch.tv/docs/api/reference#warn-chat-user
+    void warnUser(
+        QString broadcasterID, QString moderatorID, QString userID,
+        QString reason, ResultCallback<> successCallback,
+        FailureCallback<HelixWarnUserError, QString> failureCallback) final;
+
     // Send a whisper
     // https://dev.twitch.tv/docs/api/reference#send-whisper
     void sendWhisper(
@@ -1343,7 +1493,7 @@ public:
     // This will follow the returned cursor and return up to `maxChattersToFetch` chatters
     // https://dev.twitch.tv/docs/api/reference#get-chatters
     void getChatters(
-        QString broadcasterID, QString moderatorID, int maxChattersToFetch,
+        QString broadcasterID, QString moderatorID, size_t maxChattersToFetch,
         ResultCallback<HelixChatters> successCallback,
         FailureCallback<HelixGetChattersError, QString> failureCallback) final;
 
@@ -1401,6 +1551,33 @@ public:
         ResultCallback<HelixSentMessage> successCallback,
         FailureCallback<HelixSendMessageError, QString> failureCallback) final;
 
+    /// https://dev.twitch.tv/docs/api/reference/#get-user-emotes
+    void getUserEmotes(
+        QString userID, QString broadcasterID,
+        ResultCallback<std::vector<HelixChannelEmote>, HelixPaginationState>
+            pageCallback,
+        FailureCallback<QString> failureCallback,
+        CancellationToken &&token) final;
+
+    /// https://dev.twitch.tv/docs/api/reference/#get-followed-channels
+    /// (non paginated)
+    void getFollowedChannel(
+        QString userID, QString broadcasterID, const QObject *caller,
+        ResultCallback<std::optional<HelixFollowedChannel>> successCallback,
+        FailureCallback<QString> failureCallback) final;
+
+    // https://dev.twitch.tv/docs/api/reference/#create-eventsub-subscription
+    void createEventSubSubscription(
+        const eventsub::SubscriptionRequest &request, const QString &sessionID,
+        ResultCallback<HelixCreateEventSubSubscriptionResponse> successCallback,
+        FailureCallback<HelixCreateEventSubSubscriptionError, QString>
+            failureCallback) final;
+
+    // https://dev.twitch.tv/docs/api/reference/#delete-eventsub-subscription
+    void deleteEventSubSubscription(
+        const QString &subscriptionID, ResultCallback<> successCallback,
+        FailureCallback<QString> failureCallback) final;
+
     void update(QString clientId, QString oauthToken) final;
 
     static void initialize();
@@ -1416,7 +1593,7 @@ protected:
     // Recursive boy
     void onFetchChattersSuccess(
         std::shared_ptr<HelixChatters> finalChatters, QString broadcasterID,
-        QString moderatorID, int maxChattersToFetch,
+        QString moderatorID, size_t maxChattersToFetch,
         ResultCallback<HelixChatters> successCallback,
         FailureCallback<HelixGetChattersError, QString> failureCallback,
         HelixChatters chatters);
@@ -1431,7 +1608,7 @@ protected:
     // Recursive boy
     void onFetchModeratorsSuccess(
         std::shared_ptr<std::vector<HelixModerator>> finalModerators,
-        QString broadcasterID, int maxModeratorsToFetch,
+        QString broadcasterID, size_t maxModeratorsToFetch,
         ResultCallback<std::vector<HelixModerator>> successCallback,
         FailureCallback<HelixGetModeratorsError, QString> failureCallback,
         HelixModerators moderators);
@@ -1455,7 +1632,9 @@ private:
     /// Paginate the `url` endpoint and use `baseQuery` as the starting point for pagination.
     /// @param onPage returns true while a new page is expected. Once false is returned, pagination will stop.
     void paginate(const QString &url, const QUrlQuery &baseQuery,
-                  std::function<bool(const QJsonObject &)> onPage,
+                  std::function<bool(const QJsonObject &,
+                                     const HelixPaginationState &state)>
+                      onPage,
                   std::function<void(NetworkResult)> onError,
                   CancellationToken &&token);
 

@@ -220,6 +220,7 @@ public:
     void hideResizeHandles();
     void resetMouseStatus();
 
+    NodeDescriptor buildDescriptor() const;
     void applyFromDescriptor(const NodeDescriptor &rootNode);
 
     void popup();
@@ -237,6 +238,7 @@ protected:
     void resizeEvent(QResizeEvent *event) override;
 
 private:
+    NodeDescriptor buildDescriptorRecursively(const Node *currentNode) const;
     void applyFromDescriptorRecursively(const NodeDescriptor &rootNode,
                                         Node *baseNode);
 
@@ -244,6 +246,7 @@ private:
     void selectSplitRecursive(Node *node, SplitDirection direction);
     void focusSplitRecursive(Node *node);
     void setPreferedTargetRecursive(Node *node);
+    void paintSplitBorder(Node *node, QPainter *painter);
 
     void addSplit(Split *split);
 

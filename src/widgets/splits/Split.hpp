@@ -21,6 +21,7 @@ class SplitInput;
 class SplitContainer;
 class SplitOverlay;
 class SelectChannelDialog;
+class OverlayWindow;
 
 // Each ChatWidget consists of three sub-elements that handle their own part of
 // the chat widget: ChatWidgetHeader
@@ -56,7 +57,7 @@ public:
     void setChannel(IndirectChannel newChannel);
 
     void setFilters(const QList<QUuid> ids);
-    const QList<QUuid> getFilters() const;
+    QList<QUuid> getFilters() const;
 
     void setModerationMode(bool value);
     bool getModerationMode() const;
@@ -76,6 +77,11 @@ public:
     void setContainer(SplitContainer *container);
 
     void setInputReply(const MessagePtr &reply);
+
+    // This is called on window focus lost
+    void unpause();
+
+    OverlayWindow *overlayWindow();
 
     static pajlada::Signals::Signal<Qt::KeyboardModifiers>
         modifierStatusChanged;
@@ -104,11 +110,7 @@ protected:
     void keyPressEvent(QKeyEvent *event) override;
     void keyReleaseEvent(QKeyEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;
-#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
     void enterEvent(QEnterEvent * /*event*/) override;
-#else
-    void enterEvent(QEvent * /*event*/) override;
-#endif
     void leaveEvent(QEvent *event) override;
 
     void dragEnterEvent(QDragEnterEvent *event) override;
@@ -127,11 +129,11 @@ private:
     /**
      * @brief Opens Twitch channel stream in streamlink app (if stream is live and streamlink is installed)
      */
-    void openChannelInStreamlink(QString channelName);
+    void openChannelInStreamlink(const QString channelName);
     /**
      * @brief Opens Twitch channel chat in a new Chatterino tab
      */
-    void joinChannelInNewTab(ChannelPtr channel);
+    void joinChannelInNewTab(const ChannelPtr &channel);
 
     /**
      * @brief Refresh moderation mode layouts/buttons
@@ -155,6 +157,8 @@ private:
     SplitInput *const input_;
     SplitOverlay *const overlay_;
 
+    QPointer<OverlayWindow> overlayWindow_;
+
     QPointer<SelectChannelDialog> selectChannelDialog_;
 
     pajlada::Signals::Connection channelIDChangedConnection_;
@@ -169,13 +173,14 @@ private:
     pajlada::Signals::SignalHolder signalHolder_;
     std::vector<boost::signals2::scoped_connection> bSignals_;
 
-public slots:
+public Q_SLOTS:
     void addSibling();
     void deleteFromContainer();
     void changeChannel();
     void explainMoving();
     void explainSplitting();
     void popup();
+    void showOverlayWindow();
     void clear();
     void openInBrowser();
     void openModViewInBrowser();
@@ -185,7 +190,7 @@ public slots:
     void openWithCustomScheme();
     void setFiltersDialog();
     void showSearch(bool singleChannel);
-    void showChatterList();
+    void openChatterList();
     void openSubPage();
     void reloadChannelAndSubscriberEmotes();
     void reconnect();

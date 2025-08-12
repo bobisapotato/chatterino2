@@ -30,24 +30,47 @@ NetworkTask::~NetworkTask()
 
 void NetworkTask::run()
 {
-    const auto &timeout = this->data_->timeout;
-    if (timeout.has_value())
-    {
-        this->timer_ = new QTimer(this);
-        this->timer_->setSingleShot(true);
-        this->timer_->start(timeout.value());
-        QObject::connect(this->timer_, &QTimer::timeout, this,
-                         &NetworkTask::timeout);
-    }
-
     this->reply_ = this->createReply();
     if (!this->reply_)
     {
         this->deleteLater();
         return;
     }
+
+    const auto &timeout = this->data_->timeout;
+    if (timeout.has_value())
+    {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 3, 0)
+        QObject::connect(this->reply_, &QNetworkReply::requestSent, this,
+                         [this]() {
+                             const auto &timeout = this->data_->timeout;
+                             this->timer_ = new QTimer(this);
+                             this->timer_->setSingleShot(true);
+                             this->timer_->start(timeout.value());
+                             QObject::connect(this->timer_, &QTimer::timeout,
+                                              this, &NetworkTask::timeout);
+                         });
+#else
+        this->timer_ = new QTimer(this);
+        this->timer_->setSingleShot(true);
+        this->timer_->start(timeout.value());
+        QObject::connect(this->timer_, &QTimer::timeout, this,
+                         &NetworkTask::timeout);
+#endif
+    }
+
     QObject::connect(this->reply_, &QNetworkReply::finished, this,
                      &NetworkTask::finished);
+
+#ifndef NDEBUG
+    if (this->data_->ignoreSslErrors)
+    {
+        QObject::connect(this->reply_, &QNetworkReply::sslErrors, this,
+                         [this](const auto &errors) {
+                             this->reply_->ignoreSslErrors(errors);
+                         });
+    }
+#endif
 }
 
 QNetworkReply *NetworkTask::createReply()
@@ -118,7 +141,7 @@ void NetworkTask::logReply()
 void NetworkTask::writeToCache(const QByteArray &bytes) const
 {
     std::ignore = QtConcurrent::run([data = this->data_, bytes] {
-        QFile cachedFile(getIApp()->getPaths().cacheDirectory() + "/" +
+        QFile cachedFile(getApp()->getPaths().cacheDirectory() + "/" +
                          data->getHash());
 
         if (cachedFile.open(QIODevice::WriteOnly))

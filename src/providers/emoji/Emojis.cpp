@@ -4,6 +4,8 @@
 #include "messages/Emote.hpp"
 #include "messages/Image.hpp"
 #include "singletons/Settings.hpp"
+#include "util/QCompareTransparent.hpp"
+#include "util/QMagicEnum.hpp"
 #include "util/RapidjsonHelpers.hpp"
 
 #include <boost/variant.hpp>
@@ -28,7 +30,7 @@ void parseEmoji(const std::shared_ptr<EmojiData> &emojiData,
                 const rapidjson::Value &unparsedEmoji,
                 const QString &shortCode = {})
 {
-    std::vector<uint32_t> unicodeBytes{};
+    std::vector<char32_t> unicodeBytes{};
 
     struct {
         bool apple;
@@ -62,19 +64,19 @@ void parseEmoji(const std::shared_ptr<EmojiData> &emojiData,
 
     if (capabilities.apple)
     {
-        emojiData->capabilities.insert("Apple");
+        emojiData->capabilities.set(EmojiData::Capability::Apple);
     }
     if (capabilities.google)
     {
-        emojiData->capabilities.insert("Google");
+        emojiData->capabilities.set(EmojiData::Capability::Google);
     }
     if (capabilities.twitter)
     {
-        emojiData->capabilities.insert("Twitter");
+        emojiData->capabilities.set(EmojiData::Capability::Twitter);
     }
     if (capabilities.facebook)
     {
-        emojiData->capabilities.insert("Facebook");
+        emojiData->capabilities.set(EmojiData::Capability::Facebook);
     }
 
     QStringList unicodeCharacters = emojiData->unifiedCode.toLower().split('-');
@@ -82,7 +84,7 @@ void parseEmoji(const std::shared_ptr<EmojiData> &emojiData,
     for (const QString &unicodeCharacter : unicodeCharacters)
     {
         bool ok{false};
-        unicodeBytes.push_back(QString(unicodeCharacter).toUInt(&ok, 16));
+        unicodeBytes.push_back(unicodeCharacter.toUInt(&ok, 16));
         if (!ok)
         {
             qCWarning(chatterinoEmoji)
@@ -92,14 +94,15 @@ void parseEmoji(const std::shared_ptr<EmojiData> &emojiData,
     }
 
     // We can safely do a narrowing static cast since unicodeBytes will never be a large number
-    emojiData->value = QString::fromUcs4(unicodeBytes.data(),
-                                         static_cast<int>(unicodeBytes.size()));
+    emojiData->value =
+        QString::fromUcs4(unicodeBytes.data(),
+                          static_cast<QString::size_type>(unicodeBytes.size()));
 
     if (!emojiData->nonQualifiedCode.isEmpty())
     {
         QStringList nonQualifiedCharacters =
             emojiData->nonQualifiedCode.toLower().split('-');
-        std::vector<uint32_t> nonQualifiedBytes{};
+        std::vector<char32_t> nonQualifiedBytes{};
         for (const QString &unicodeCharacter : nonQualifiedCharacters)
         {
             bool ok{false};
@@ -115,9 +118,9 @@ void parseEmoji(const std::shared_ptr<EmojiData> &emojiData,
         }
 
         // We can safely do a narrowing static cast since unicodeBytes will never be a large number
-        emojiData->nonQualified =
-            QString::fromUcs4(nonQualifiedBytes.data(),
-                              static_cast<int>(nonQualifiedBytes.size()));
+        emojiData->nonQualified = QString::fromUcs4(
+            nonQualifiedBytes.data(),
+            static_cast<QString::size_type>(nonQualifiedBytes.size()));
     }
 }
 
@@ -243,11 +246,15 @@ void Emojis::sortEmojis()
 void Emojis::loadEmojiSet()
 {
     getSettings()->emojiSet.connect([this](const auto &emojiSet) {
+        auto setCapability = qmagicenum::enumCast<EmojiData::Capability>(
+                                 emojiSet, qmagicenum::CASE_INSENSITIVE)
+                                 .value_or(EmojiData::Capability::Google);
+
         for (const auto &emoji : this->emojis)
         {
             QString emojiSetToUse = emojiSet;
             // clang-format off
-            static std::map<QString, QString> emojiSets = {
+            static std::map<QString, QString, QCompareCaseInsensitive> emojiSets = {
                 // JSDELIVR
                 // {"Twitter", "https://cdn.jsdelivr.net/npm/emoji-datasource-twitter@4.0.4/img/twitter/64/"},
                 // {"Facebook", "https://cdn.jsdelivr.net/npm/emoji-datasource-facebook@4.0.4/img/facebook/64/"},
@@ -269,15 +276,15 @@ void Emojis::loadEmojiSet()
             };
             // clang-format on
 
-            // As of emoji-data v15.1.1, google is the only source missing no images.
-            if (!emoji->capabilities.contains(emojiSetToUse))
+            // Both Twitter/Twemoji and Google have all images
+            if (!emoji->capabilities.has(setCapability))
             {
-                emojiSetToUse = "Google";
+                emojiSetToUse = QStringLiteral("Twitter");
             }
 
             QString code = emoji->unifiedCode.toLower();
             QString urlPrefix =
-                "https://pajbot.com/static/emoji-v2/img/google/64/";
+                "https://pajbot.com/static/emoji-v2/img/twitter/64/";
             auto it = emojiSets.find(emojiSetToUse);
             if (it != emojiSets.end())
             {
@@ -298,7 +305,7 @@ std::vector<boost::variant<EmotePtr, QString>> Emojis::parse(
     auto result = std::vector<boost::variant<EmotePtr, QString>>();
     QString::size_type lastParsedEmojiEndIndex = 0;
 
-    for (auto i = 0; i < text.length(); ++i)
+    for (qsizetype i = 0; i < text.length(); ++i)
     {
         const QChar character = text.at(i);
 
@@ -400,7 +407,7 @@ QString Emojis::replaceShortCodes(const QString &text) const
     QString ret(text);
     auto it = this->findShortCodesRegex_.globalMatch(text);
 
-    int32_t offset = 0;
+    qsizetype offset = 0;
 
     while (it.hasNext())
     {

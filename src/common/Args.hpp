@@ -60,8 +60,14 @@ public:
     bool dontLoadMainWindow{};
     std::optional<WindowLayout> customChannelLayout;
     std::optional<Channel> activateChannel;
+    std::optional<QString> initialLogin;
     bool verbose{};
     bool safeMode{};
+
+#ifndef NDEBUG
+    // twitch event websocket start-server --ssl --port 3012
+    bool useLocalEventsub = false;
+#endif
 
     QStringList currentArguments() const;
 

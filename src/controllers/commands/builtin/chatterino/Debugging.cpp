@@ -1,13 +1,21 @@
 #include "controllers/commands/builtin/chatterino/Debugging.hpp"
 
+#include "Application.hpp"
 #include "common/Channel.hpp"
 #include "common/Env.hpp"
 #include "common/Literals.hpp"
 #include "controllers/commands/CommandContext.hpp"
+#include "controllers/notifications/NotificationController.hpp"
 #include "messages/Image.hpp"
+#include "messages/Message.hpp"
 #include "messages/MessageBuilder.hpp"
 #include "messages/MessageElement.hpp"
+#include "providers/twitch/eventsub/Controller.hpp"
+#include "providers/twitch/TwitchChannel.hpp"
+#include "providers/twitch/TwitchIrcServer.hpp"
 #include "singletons/Theme.hpp"
+#include "singletons/Toasts.hpp"
+#include "singletons/WindowManager.hpp"
 #include "util/PostToThread.hpp"
 
 #include <QApplication>
@@ -22,12 +30,12 @@ QString setLoggingRules(const CommandContext &ctx)
 {
     if (ctx.words.size() < 2)
     {
-        ctx.channel->addMessage(makeSystemMessage(
+        ctx.channel->addSystemMessage(
             "Usage: /c2-set-logging-rules <rules...>. To enable debug logging "
             "for all categories from chatterino, use "
             "'chatterino.*.debug=true'. For the format on the rules, see "
             "https://doc.qt.io/qt-6/"
-            "qloggingcategory.html#configuring-categories"));
+            "qloggingcategory.html#configuring-categories");
         return {};
     }
 
@@ -47,7 +55,7 @@ QString setLoggingRules(const CommandContext &ctx)
             "https://doc.qt.io/qt-6/qloggingcategory.html#setFilterRules");
     }
 
-    ctx.channel->addMessage(makeSystemMessage(message));
+    ctx.channel->addSystemMessage(message);
     return {};
 }
 
@@ -56,15 +64,13 @@ QString toggleThemeReload(const CommandContext &ctx)
     if (getTheme()->isAutoReloading())
     {
         getTheme()->setAutoReload(false);
-        ctx.channel->addMessage(
-            makeSystemMessage(u"Disabled theme auto reloading."_s));
+        ctx.channel->addSystemMessage(u"Disabled theme auto reloading."_s);
         return {};
     }
 
     getTheme()->setAutoReload(true);
-    ctx.channel->addMessage(
-        makeSystemMessage(u"Auto reloading theme every %1 ms."_s.arg(
-            Theme::AUTO_RELOAD_INTERVAL_MS)));
+    ctx.channel->addSystemMessage(u"Auto reloading theme every %1 ms."_s.arg(
+        Theme::AUTO_RELOAD_INTERVAL_MS));
     return {};
 }
 
@@ -81,6 +87,7 @@ QString listEnvironmentVariables(const CommandContext &ctx)
     QStringList debugMessages{
         "recentMessagesApiUrl: " + env.recentMessagesApiUrl,
         "linkResolverUrl: " + env.linkResolverUrl,
+        "proxyUrl: " + env.proxyUrl.value_or("N/A"),
         "twitchServerHost: " + env.twitchServerHost,
         "twitchServerPort: " + QString::number(env.twitchServerPort),
         "twitchServerSecure: " + QString::number(env.twitchServerSecure),
@@ -92,7 +99,7 @@ QString listEnvironmentVariables(const CommandContext &ctx)
         builder.emplace<TimestampElement>(QTime::currentTime());
         builder.emplace<TextElement>(str, MessageElementFlag::Text,
                                      MessageColor::System);
-        channel->addMessage(builder.release());
+        channel->addMessage(builder.release(), MessageContext::Original);
     }
     return "";
 }
@@ -107,7 +114,7 @@ QString listArgs(const CommandContext &ctx)
 
     QString msg = QApplication::instance()->arguments().join(' ');
 
-    channel->addMessage(makeSystemMessage(msg));
+    channel->addSystemMessage(msg);
 
     return "";
 }
@@ -131,6 +138,70 @@ QString forceImageUnload(const CommandContext &ctx)
         auto &iep = ImageExpirationPool::instance();
         iep.freeAll();
     });
+    return "";
+}
+
+QString forceLayoutChannelViews(const CommandContext & /*ctx*/)
+{
+    getApp()->getWindows()->forceLayoutChannelViews();
+    return {};
+}
+
+QString incrementImageGeneration(const CommandContext & /*ctx*/)
+{
+    getApp()->getWindows()->incGeneration();
+    return {};
+}
+
+QString invalidateBuffers(const CommandContext & /*ctx*/)
+{
+    getApp()->getWindows()->invalidateChannelViewBuffers();
+    return {};
+}
+
+QString eventsub(const CommandContext & /*ctx*/)
+{
+    getApp()->getEventSub()->debug();
+    return {};
+}
+
+QString debugTest(const CommandContext &ctx)
+{
+    if (!ctx.channel)
+    {
+        return "";
+    }
+
+    const auto command = ctx.words.value(1);
+
+    if (command == "timeout-irc")
+    {
+        auto nowMillis = QDateTime::currentDateTime().toSecsSinceEpoch();
+
+        const auto ircText =
+            QString(
+                "@tmi-sent-ts=%1;room-id=117166826;user-id=11148817;badges=;"
+                "badge-info=;flags=;user-type=;emotes=;target-user-id=11148817;"
+                "ban-"
+                "duration=1 :tmi.twitch.tv CLEARCHAT #testaccount_420 pajlada")
+                .arg(nowMillis);
+        getApp()->getTwitch()->addFakeMessage(ircText);
+    }
+    else if (command == "desktop-notify")
+    {
+        auto title = ctx.twitchChannel->accessStreamStatus()->title;
+
+        getApp()->getToasts()->sendChannelNotification(
+            ctx.twitchChannel->getName(), title);
+        ctx.channel->addSystemMessage(
+            QString("debug-test sent desktop notification"));
+    }
+    else
+    {
+        ctx.channel->addSystemMessage(
+            QString("debug-test called with command: '%1'").arg(command));
+    }
+
     return "";
 }
 

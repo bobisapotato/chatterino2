@@ -5,9 +5,14 @@ on:
   pull_request:
   workflow_dispatch:
   merge_group:
+  push:
+    branches:
+      - master
+      - main
 
 env:
-  TWITCH_PUBSUB_SERVER_TAG: v1.0.7
+  TWITCH_PUBSUB_SERVER_TAG: v1.0.11
+  HTTPBOX_TAG: v0.2.1
   QT_QPA_PLATFORM: minimal
 
 concurrency:
@@ -16,7 +21,7 @@ concurrency:
 
 jobs:
   test:
-    name: "${{ matrix.os }}"
+    name: "Test ${{ matrix.os }}, Qt ${{ matrix.qt-version }}"
     runs-on: ubuntu-latest
     container: ${{ matrix.container }}
     strategy:
@@ -24,12 +29,8 @@ jobs:
         include:
           - os: "ubuntu-22.04"
             container: ghcr.io/chatterino/chatterino2-build-ubuntu-22.04:latest
-            qt-version: 6.6.1
-            plugins: true
+            qt-version: 6.7.1
       fail-fast: false
-    env:
-      C2_PLUGINS: ${{ matrix.plugins }}
-      C2_BUILD_WITH_QT6: ${{ startsWith(matrix.qt-version, '6.') }}
 
     steps:
       - uses: actions/checkout@v4
@@ -39,11 +40,18 @@ jobs:
       - name: Create build directory (Ubuntu)
         run: mkdir build-test
 
-      - name: Install googlebench
+      - name: Install dependencies
         run: |
           sudo apt update
-          sudo apt -y install \
-            libbenchmark-dev
+          sudo DEBIAN_FRONTEND=noninteractive apt -y --no-install-recommends install \
+            libbenchmark-dev gcovr gnupg
+
+      - name: Install httpbox
+        run: |
+          curl -L -o httpbox.tar.xz "https://github.com/Chatterino/httpbox/releases/download/${{ env.HTTPBOX_TAG }}/httpbox-x86_64-unknown-linux-gnu.tar.xz"
+          tar -xJf httpbox.tar.xz
+          mv ./httpbox-x86_64-unknown-linux-gnu/httpbox /usr/local/bin
+        working-directory: /tmp
 
       - name: Build (Ubuntu)
         run: |
@@ -51,12 +59,12 @@ jobs:
             -DBUILD_TESTS=On \
             -DBUILD_BENCHMARKS=On \
             -DBUILD_APP=OFF \
-            -DCHATTERINO_PLUGINS="$C2_PLUGINS" \
             -DCMAKE_PREFIX_PATH="$Qt6_DIR/lib/cmake" \
-            -DBUILD_WITH_QT6="$C2_BUILD_WITH_QT6" \
             -DCHATTERINO_STATIC_QT_BUILD=On \
+            -DCHATTERINO_GENERATE_COVERAGE=On \
+            -DCMAKE_BUILD_TYPE=Debug \
             ..
-          cmake --build .
+          cmake --build . -j $(nproc)
         working-directory: build-test
 
       - name: Download and extract Twitch PubSub Server Test
@@ -66,21 +74,28 @@ jobs:
           tar -xzf pubsub-server.tar.gz -C pubsub-server-test
           rm pubsub-server.tar.gz
           cd pubsub-server-test
-          curl -L -o server.crt "https://github.com/Chatterino/twitch-pubsub-server-test/raw/${{ env.TWITCH_PUBSUB_SERVER_TAG }}/cmd/server/server.crt"
-          curl -L -o server.key "https://github.com/Chatterino/twitch-pubsub-server-test/raw/${{ env.TWITCH_PUBSUB_SERVER_TAG }}/cmd/server/server.key"
           cd ..
-
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Cargo Install httpbox
-        run: |
-          cargo install --git https://github.com/kevinastone/httpbox --rev 89b971f
 
       - name: Test
         timeout-minutes: 30
         run: |
           httpbox --port 9051 &
           cd ../pubsub-server-test
-          ./server 127.0.0.1:9050 &
+          ./server 127.0.0.1:9050 127.0.0.1:9052 &
           cd ../build-test
-          ctest --repeat until-pass:4 --output-on-failure --exclude-regex ClassicEmoteNameFiltering
+          ctest --repeat until-pass:4 --output-on-failure
         working-directory: build-test
+
+      - name: Run benchmark
+        timeout-minutes: 2
+        run: |
+          ./bin/chatterino-benchmark --benchmark_min_time=1x
+        working-directory: build-test
+
+      - name: Upload coverage reports to Codecov
+        uses: codecov/codecov-action@v5.4.3
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          plugins: gcov
+          fail_ci_if_error: true
+          verbose: true

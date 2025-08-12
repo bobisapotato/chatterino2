@@ -3,7 +3,12 @@
 #include "util/QMagicEnum.hpp"
 
 #include <pajlada/settings.hpp>
+#include <QSize>
 #include <QString>
+
+#include <memory>
+#include <string>
+#include <type_traits>
 
 namespace chatterino {
 
@@ -55,12 +60,15 @@ using DoubleSetting = ChatterinoSetting<double>;
 using IntSetting = ChatterinoSetting<int>;
 using StringSetting = ChatterinoSetting<std::string>;
 using QStringSetting = ChatterinoSetting<QString>;
+using QSizeSetting = ChatterinoSetting<QSize>;
 
+/// Accepts any enum and saves the enum value as an integer
+///
+/// e.g. for enum class {Foo = 2, Bar = 6}, Foo would be saved as 2 and Bar would be saved as 6
 template <typename Enum>
-class EnumSetting
-    : public ChatterinoSetting<typename std::underlying_type<Enum>::type>
+class EnumSetting : public ChatterinoSetting<std::underlying_type_t<Enum>>
 {
-    using Underlying = typename std::underlying_type<Enum>::type;
+    using Underlying = std::underlying_type_t<Enum>;
 
 public:
     using ChatterinoSetting<Underlying>::ChatterinoSetting;
@@ -71,7 +79,6 @@ public:
         _registerSetting(this->getData());
     }
 
-    template <typename T2>
     EnumSetting<Enum> &operator=(Enum newValue)
     {
         this->setValue(Underlying(newValue));
@@ -126,7 +133,7 @@ public:
         return this->getEnum();
     }
 
-    Enum getEnum()
+    Enum getEnum() const
     {
         return qmagicenum::enumCast<Enum>(this->getValue(),
                                           qmagicenum::CASE_INSENSITIVE)
@@ -140,5 +147,18 @@ public:
 
     using pajlada::Settings::Setting<QString>::operator QString;
 };
+
+template <typename T>
+struct IsChatterinoSettingT : std::false_type {
+};
+template <typename T>
+struct IsChatterinoSettingT<ChatterinoSetting<T>> : std::true_type {
+};
+template <typename T>
+struct IsChatterinoSettingT<EnumStringSetting<T>> : std::true_type {
+};
+
+template <typename T>
+concept IsChatterinoSetting = IsChatterinoSettingT<T>::value;
 
 }  // namespace chatterino

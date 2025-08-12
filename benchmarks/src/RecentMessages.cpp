@@ -2,8 +2,11 @@
 #include "controllers/accounts/AccountController.hpp"
 #include "controllers/highlights/HighlightController.hpp"
 #include "messages/Emote.hpp"
+#include "mocks/BaseApplication.hpp"
 #include "mocks/DisabledStreamerMode.hpp"
-#include "mocks/EmptyApplication.hpp"
+#include "mocks/Emotes.hpp"
+#include "mocks/LinkResolver.hpp"
+#include "mocks/Logging.hpp"
 #include "mocks/TwitchIrcServer.hpp"
 #include "mocks/UserData.hpp"
 #include "providers/bttv/BttvEmotes.hpp"
@@ -15,7 +18,6 @@
 #include "providers/seventv/SeventvEmotes.hpp"
 #include "providers/twitch/TwitchBadges.hpp"
 #include "providers/twitch/TwitchChannel.hpp"
-#include "singletons/Emotes.hpp"
 #include "singletons/Resources.hpp"
 
 #include <benchmark/benchmark.h>
@@ -31,9 +33,14 @@ using namespace literals;
 
 namespace {
 
-class MockApplication : mock::EmptyApplication
+class MockApplication : public mock::BaseApplication
 {
 public:
+    MockApplication()
+        : highlights(this->settings, &this->accounts)
+    {
+    }
+
     IEmotes *getEmotes() override
     {
         return &this->emotes;
@@ -99,10 +106,22 @@ public:
         return &this->streamerMode;
     }
 
+    ILinkResolver *getLinkResolver() override
+    {
+        return &this->linkResolver;
+    }
+
+    ILogging *getChatLogger() override
+    {
+        return &this->logging;
+    }
+
+    mock::EmptyLogging logging;
     AccountController accounts;
-    Emotes emotes;
+    mock::Emotes emotes;
     mock::UserDataController userData;
     mock::MockTwitchIrcServer twitch;
+    mock::EmptyLinkResolver linkResolver;
     ChatterinoBadges chatterinoBadges;
     FfzBadges ffzBadges;
     SeventvBadges seventvBadges;

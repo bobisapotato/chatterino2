@@ -15,11 +15,14 @@ UpdateDialog::UpdateDialog()
     : BaseWindow({BaseWindow::Frameless, BaseWindow::TopMost,
                   BaseWindow::EnableCustomFrame, BaseWindow::DisableLayoutSave})
 {
+    this->windowDeactivateAction = WindowDeactivateAction::Delete;
+
     auto layout =
         LayoutCreator<UpdateDialog>(this).setLayoutType<QVBoxLayout>();
 
     layout.emplace<Label>("You shouldn't be seeing this dialog.")
-        .assign(&this->ui_.label);
+        .assign(&this->ui_.label)
+        ->setWordWrap(true);
 
     auto buttons = layout.emplace<QDialogButtonBox>();
     auto *install = buttons->addButton("Install", QDialogButtonBox::AcceptRole);
@@ -27,7 +30,7 @@ UpdateDialog::UpdateDialog()
     auto *dismiss = buttons->addButton("Dismiss", QDialogButtonBox::RejectRole);
 
     QObject::connect(install, &QPushButton::clicked, this, [this] {
-        getIApp()->getUpdates().installUpdates();
+        getApp()->getUpdates().installUpdates();
         this->close();
     });
     QObject::connect(dismiss, &QPushButton::clicked, this, [this] {
@@ -35,14 +38,14 @@ UpdateDialog::UpdateDialog()
         this->close();
     });
 
-    this->updateStatusChanged(getIApp()->getUpdates().getStatus());
-    this->connections_.managedConnect(getIApp()->getUpdates().statusUpdated,
+    this->updateStatusChanged(getApp()->getUpdates().getStatus());
+    this->connections_.managedConnect(getApp()->getUpdates().statusUpdated,
                                       [this](auto status) {
                                           this->updateStatusChanged(status);
                                       });
 
-    this->setScaleIndependantHeight(150);
-    this->setScaleIndependantWidth(250);
+    this->setScaleIndependentHeight(150);
+    this->setScaleIndependentWidth(250);
 }
 
 void UpdateDialog::updateStatusChanged(Updates::Status status)
@@ -52,18 +55,18 @@ void UpdateDialog::updateStatusChanged(Updates::Status status)
     switch (status)
     {
         case Updates::UpdateAvailable: {
-            this->ui_.label->setText((
-                getIApp()->getUpdates().isDowngrade()
-                    ? QString(
-                          "The version online (%1) seems to be\nlower than the "
-                          "current (%2).\nEither a version was reverted or "
-                          "you are\nrunning a newer build.\n\nDo you want to "
-                          "download and install it?")
-                          .arg(getIApp()->getUpdates().getOnlineVersion(),
-                               getIApp()->getUpdates().getCurrentVersion())
-                    : QString("An update (%1) is available.\n\nDo you want to "
-                              "download and install it?")
-                          .arg(getIApp()->getUpdates().getOnlineVersion())));
+            this->ui_.label->setText(
+                (getApp()->getUpdates().isDowngrade()
+                     ? QString(
+                           "The version online (%1) seems to be lower than the "
+                           "current (%2).\nEither a version was reverted or "
+                           "you are running a newer build.\n\nDo you want to "
+                           "download and install it?")
+                           .arg(getApp()->getUpdates().getOnlineVersion(),
+                                getApp()->getUpdates().getCurrentVersion())
+                     : QString("An update (%1) is available.\n\nDo you want to "
+                               "download and install it?")
+                           .arg(getApp()->getUpdates().getOnlineVersion())));
             this->updateGeometry();
         }
         break;

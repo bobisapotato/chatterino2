@@ -18,8 +18,14 @@ namespace chatterino {
 
 BaseWidget::BaseWidget(QWidget *parent, Qt::WindowFlags f)
     : QWidget(parent, f)
-    , theme(getIApp()->getThemes())
+    , theme(getApp()->getThemes())
 {
+    auto *baseWidget = dynamic_cast<BaseWidget *>(this->window());
+    if (baseWidget && baseWidget != this)
+    {
+        this->scale_ = baseWidget->scale_;
+    }
+
     this->signalHolder_.managedConnect(this->theme->updated, [this]() {
         this->themeChangedEvent();
 
@@ -54,13 +60,17 @@ float BaseWidget::scale() const
 
 void BaseWidget::setScale(float value)
 {
-    // update scale value
+    if (this->scale_ == value)
+    {
+        return;
+    }
+
     this->scale_ = value;
 
     this->scaleChangedEvent(this->scale());
     this->scaleChanged.invoke(this->scale());
 
-    this->setScaleIndependantSize(this->scaleIndependantSize());
+    this->setScaleIndependentSize(this->scaleIndependentSize());
 }
 
 void BaseWidget::setOverrideScale(std::optional<float> value)
@@ -74,29 +84,29 @@ std::optional<float> BaseWidget::overrideScale() const
     return this->overrideScale_;
 }
 
-QSize BaseWidget::scaleIndependantSize() const
+QSize BaseWidget::scaleIndependentSize() const
 {
-    return this->scaleIndependantSize_;
+    return this->scaleIndependentSize_;
 }
 
-int BaseWidget::scaleIndependantWidth() const
+int BaseWidget::scaleIndependentWidth() const
 {
-    return this->scaleIndependantSize_.width();
+    return this->scaleIndependentSize_.width();
 }
 
-int BaseWidget::scaleIndependantHeight() const
+int BaseWidget::scaleIndependentHeight() const
 {
-    return this->scaleIndependantSize_.height();
+    return this->scaleIndependentSize_.height();
 }
 
-void BaseWidget::setScaleIndependantSize(int width, int height)
+void BaseWidget::setScaleIndependentSize(int width, int height)
 {
-    this->setScaleIndependantSize(QSize(width, height));
+    this->setScaleIndependentSize(QSize(width, height));
 }
 
-void BaseWidget::setScaleIndependantSize(QSize size)
+void BaseWidget::setScaleIndependentSize(QSize size)
 {
-    this->scaleIndependantSize_ = size;
+    this->scaleIndependentSize_ = size;
 
     if (size.width() > 0)
     {
@@ -108,29 +118,16 @@ void BaseWidget::setScaleIndependantSize(QSize size)
     }
 }
 
-void BaseWidget::setScaleIndependantWidth(int value)
+void BaseWidget::setScaleIndependentWidth(int value)
 {
-    this->setScaleIndependantSize(
-        QSize(value, this->scaleIndependantSize_.height()));
+    this->setScaleIndependentSize(
+        QSize(value, this->scaleIndependentSize_.height()));
 }
 
-void BaseWidget::setScaleIndependantHeight(int value)
+void BaseWidget::setScaleIndependentHeight(int value)
 {
-    this->setScaleIndependantSize(
-        QSize(this->scaleIndependantSize_.width(), value));
-}
-
-float BaseWidget::qtFontScale() const
-{
-    if (auto *window = dynamic_cast<BaseWindow *>(this->window()))
-    {
-        // ensure no div by 0
-        return this->scale() / std::max<float>(0.01f, window->nativeScale_);
-    }
-    else
-    {
-        return this->scale();
-    }
+    this->setScaleIndependentSize(
+        QSize(this->scaleIndependentSize_.width(), value));
 }
 
 void BaseWidget::childEvent(QChildEvent *event)

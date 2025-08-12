@@ -3,15 +3,21 @@
 #include "providers/twitch/PubSubClientOptions.hpp"
 #include "providers/twitch/PubSubWebsocket.hpp"
 #include "util/ExponentialBackoff.hpp"
-#include "util/QStringHash.hpp"
+#include "util/OnceFlag.hpp"
 
+#include <boost/asio/io_context.hpp>
+#include <boost/asio/ssl/context.hpp>
 #include <pajlada/signals/signal.hpp>
 #include <QJsonObject>
 #include <QString>
 #include <websocketpp/client.hpp>
+#include <websocketpp/common/connection_hdl.hpp>
+#include <websocketpp/common/memory.hpp>
+#include <websocketpp/config/asio_client.hpp>
 
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <optional>
@@ -19,23 +25,14 @@
 #include <unordered_map>
 #include <vector>
 
+#if __has_include(<gtest/gtest_prod.h>)
+#    include <gtest/gtest_prod.h>
+#endif
+
 namespace chatterino {
 
 class TwitchAccount;
 class PubSubClient;
-
-struct ClearChatAction;
-struct DeleteAction;
-struct ModeChangedAction;
-struct ModerationStateAction;
-struct BanAction;
-struct UnbanAction;
-struct PubSubAutoModQueueMessage;
-struct AutomodAction;
-struct AutomodUserAction;
-struct AutomodInfoAction;
-struct PubSubLowTrustUsersMessage;
-struct PubSubWhisperMessage;
 
 struct PubSubListenMessage;
 struct PubSubMessage;
@@ -69,11 +66,6 @@ class PubSub
     WebsocketClient websocketClient;
     std::unique_ptr<std::thread> thread;
 
-    // Account credentials
-    // Set from setAccount
-    QString token_;
-    QString userID_;
-
 public:
     PubSub(const QString &host,
            std::chrono::seconds pingInterval = std::chrono::seconds(15));
@@ -84,90 +76,12 @@ public:
     PubSub &operator=(const PubSub &) = delete;
     PubSub &operator=(PubSub &&) = delete;
 
-    void setAccount(std::shared_ptr<TwitchAccount> account);
-
-    void start();
-    void stop();
-
-    struct {
-        Signal<ClearChatAction> chatCleared;
-        Signal<DeleteAction> messageDeleted;
-        Signal<ModeChangedAction> modeChanged;
-        Signal<ModerationStateAction> moderationStateChanged;
-
-        Signal<BanAction> userBanned;
-        Signal<UnbanAction> userUnbanned;
-
-        Signal<PubSubLowTrustUsersMessage> suspiciousMessageReceived;
-        Signal<PubSubLowTrustUsersMessage> suspiciousTreatmentUpdated;
-
-        // Message caught by automod
-        //                                channelID
-        pajlada::Signals::Signal<PubSubAutoModQueueMessage, QString>
-            autoModMessageCaught;
-
-        // Message blocked by moderator
-        Signal<AutomodAction> autoModMessageBlocked;
-
-        Signal<AutomodUserAction> automodUserMessage;
-        Signal<AutomodInfoAction> automodInfoMessage;
-    } moderation;
-
-    struct {
-        // Parsing should be done in PubSubManager as well,
-        // but for now we just send the raw data
-        Signal<const PubSubWhisperMessage &> received;
-        Signal<const PubSubWhisperMessage &> sent;
-    } whisper;
+    /// Set up connections between itself & other parts of the application
+    void initialize();
 
     struct {
         Signal<const QJsonObject &> redeemed;
     } pointReward;
-
-    /**
-     * Listen to incoming whispers for the currently logged in user.
-     * This topic is relevant for everyone.
-     *
-     * PubSub topic: whispers.{currentUserID}
-     */
-    bool listenToWhispers();
-    void unlistenWhispers();
-
-    /**
-     * Listen to moderation actions in the given channel.
-     * This topic is relevant for everyone.
-     * For moderators, this topic includes blocked/permitted terms updates,
-     * roomstate changes, general mod/vip updates, all bans/timeouts/deletions.
-     * For normal users, this topic includes moderation actions that are targetted at the local user:
-     * automod catching a user's sent message, a moderator approving or denying their caught messages,
-     * the user gaining/losing mod/vip, the user receiving a ban/timeout/deletion.
-     *
-     * PubSub topic: chat_moderator_actions.{currentUserID}.{channelID}
-     */
-    void listenToChannelModerationActions(const QString &channelID);
-    void unlistenChannelModerationActions();
-
-    /**
-     * Listen to Automod events in the given channel.
-     * This topic is only relevant for moderators.
-     * This will send events about incoming messages that
-     * are caught by Automod.
-     *
-     * PubSub topic: automod-queue.{currentUserID}.{channelID}
-     */
-    void listenToAutomod(const QString &channelID);
-    void unlistenAutomod();
-
-    /**
-     * Listen to Low Trust events in the given channel.
-     * This topic is only relevant for moderators.
-     * This will fire events about suspicious treatment updates
-     * and messages sent by restricted/monitored users.
-     *
-     * PubSub topic: low-trust-users.{currentUserID}.{channelID}
-     */
-    void listenToLowTrustUsers(const QString &channelID);
-    void unlistenLowTrustUsers();
 
     /**
      * Listen to incoming channel point redemptions in the given channel.
@@ -190,6 +104,9 @@ public:
     } diag;
 
 private:
+    void start();
+    void stop();
+
     /**
      * Unlistens to all topics matching the prefix in all clients
      */
@@ -213,14 +130,6 @@ private:
              std::owner_less<WebsocketHandle>>
         clients;
 
-    std::unordered_map<
-        QString, std::function<void(const QJsonObject &, const QString &)>>
-        moderationActionHandlers;
-
-    std::unordered_map<
-        QString, std::function<void(const QJsonObject &, const QString &)>>
-        channelTermsActionHandlers;
-
     void onMessage(websocketpp::connection_hdl hdl, WebsocketMessagePtr msg);
     void onConnectionOpen(websocketpp::connection_hdl hdl);
     void onConnectionFail(websocketpp::connection_hdl hdl);
@@ -242,12 +151,26 @@ private:
 
     void runThread();
 
-    std::shared_ptr<boost::asio::io_service::work> work{nullptr};
+    std::shared_ptr<boost::asio::executor_work_guard<
+        boost::asio::io_context::executor_type>>
+        work{nullptr};
 
     const QString host_;
     const PubSubClientOptions clientOptions_;
 
+    OnceFlag stoppedFlag_;
+
     bool stopping_{false};
+
+#ifdef FRIEND_TEST
+    friend class FTest;
+
+    FRIEND_TEST(TwitchPubSubClient, ServerRespondsToPings);
+    FRIEND_TEST(TwitchPubSubClient, ServerDoesntRespondToPings);
+    FRIEND_TEST(TwitchPubSubClient, DisconnectedAfter1s);
+    FRIEND_TEST(TwitchPubSubClient, ExceedTopicLimit);
+    FRIEND_TEST(TwitchPubSubClient, ExceedTopicLimitSingleStep);
+#endif
 };
 
 }  // namespace chatterino

@@ -1,4 +1,3 @@
-
 #include "singletons/Theme.hpp"
 
 #include "Application.hpp"
@@ -12,13 +11,16 @@
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QSet>
 #if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
 #    include <QStyleHints>
 #endif
+#include <QApplication>
 
 #include <cmath>
+#include <numbers>
 
 namespace {
 
@@ -118,31 +120,54 @@ void parseTabs(const QJsonObject &tabs, const QJsonObject &tabsFallback,
                    tabsFallback["selected"_L1].toObject(), theme.tabs.selected);
 }
 
+void parseTextColors(const QJsonObject &textColors,
+                     const QJsonObject &textColorsFallback, auto &messages)
+{
+    parseColor(messages, textColors, regular);
+    parseColor(messages, textColors, caret);
+    parseColor(messages, textColors, link);
+    parseColor(messages, textColors, system);
+    parseColor(messages, textColors, chatPlaceholder);
+}
+
+void parseMessageBackgrounds(const QJsonObject &backgrounds,
+                             const QJsonObject &backgroundsFallback,
+                             auto &messages)
+{
+    parseColor(messages, backgrounds, regular);
+    parseColor(messages, backgrounds, alternate);
+}
+
 void parseMessages(const QJsonObject &messages,
                    const QJsonObject &messagesFallback,
                    chatterino::Theme &theme)
 {
-    {
-        const auto textColors = messages["textColors"_L1].toObject();
-        const auto textColorsFallback =
-            messagesFallback["textColors"_L1].toObject();
-        parseColor(theme.messages, textColors, regular);
-        parseColor(theme.messages, textColors, caret);
-        parseColor(theme.messages, textColors, link);
-        parseColor(theme.messages, textColors, system);
-        parseColor(theme.messages, textColors, chatPlaceholder);
-    }
-    {
-        const auto backgrounds = messages["backgrounds"_L1].toObject();
-        const auto backgroundsFallback =
-            messagesFallback["backgrounds"_L1].toObject();
-        parseColor(theme.messages, backgrounds, regular);
-        parseColor(theme.messages, backgrounds, alternate);
-    }
+    parseTextColors(messages["textColors"_L1].toObject(),
+                    messagesFallback["textColors"_L1].toObject(),
+                    theme.messages);
+    parseMessageBackgrounds(messages["backgrounds"_L1].toObject(),
+                            messagesFallback["backgrounds"_L1].toObject(),
+                            theme.messages);
     parseColor(theme, messages, disabled);
     parseColor(theme, messages, selection);
     parseColor(theme, messages, highlightAnimationStart);
     parseColor(theme, messages, highlightAnimationEnd);
+}
+
+void parseOverlayMessages(const QJsonObject &overlayMessages,
+                          const QJsonObject &overlayMessagesFallback,
+                          chatterino::Theme &theme)
+{
+    parseTextColors(overlayMessages["textColors"_L1].toObject(),
+                    overlayMessagesFallback["textColors"_L1].toObject(),
+                    theme.overlayMessages);
+    parseMessageBackgrounds(
+        overlayMessages["backgrounds"_L1].toObject(),
+        overlayMessagesFallback["backgrounds"_L1].toObject(),
+        theme.overlayMessages);
+    parseColor(theme, overlayMessages, disabled);
+    parseColor(theme, overlayMessages, selection);
+    parseColor(theme, overlayMessages, background);
 }
 
 void parseScrollbars(const QJsonObject &scrollbars,
@@ -198,6 +223,9 @@ void parseColors(const QJsonObject &root, const QJsonObject &fallbackTheme,
               fallbackColors["tabs"_L1].toObject(), theme);
     parseMessages(colors["messages"_L1].toObject(),
                   fallbackColors["messages"_L1].toObject(), theme);
+    parseOverlayMessages(colors["overlayMessages"_L1].toObject(),
+                         fallbackColors["overlayMessages"_L1].toObject(),
+                         theme);
     parseScrollbars(colors["scrollbars"_L1].toObject(),
                     fallbackColors["scrollbars"_L1].toObject(), theme);
     parseSplits(colors["splits"_L1].toObject(),
@@ -282,7 +310,7 @@ bool Theme::isSystemTheme() const
     return this->themeName == u"System"_s;
 }
 
-void Theme::initialize(Settings &settings, const Paths &paths)
+Theme::Theme(const Paths &paths)
 {
     this->themeName.connect(
         [this](auto themeName) {
@@ -302,12 +330,13 @@ void Theme::initialize(Settings &settings, const Paths &paths)
     this->loadAvailableThemes(paths);
 
 #if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
-    QObject::connect(qApp->styleHints(), &QStyleHints::colorSchemeChanged,
-                     &this->lifetime_, [this] {
+    QObject::connect(QApplication::styleHints(),
+                     &QStyleHints::colorSchemeChanged, &this->lifetime_,
+                     [this] {
                          if (this->isSystemTheme())
                          {
                              this->update();
-                             getIApp()->getWindows()->forceLayoutChannelViews();
+                             getApp()->getWindows()->forceLayoutChannelViews();
                          }
                      });
 #endif
@@ -321,7 +350,7 @@ void Theme::update()
 #if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
         if (this->isSystemTheme())
         {
-            switch (qApp->styleHints()->colorScheme())
+            switch (QApplication::styleHints()->colorScheme())
             {
                 case Qt::ColorScheme::Light:
                     return this->lightSystemThemeName;
@@ -527,6 +556,29 @@ void Theme::parseFrom(const QJsonObject &root, bool isCustomTheme)
         this->buttons.copy = getResources().buttons.copyLight;
         this->buttons.pin = getResources().buttons.pinDisabledLight;
     }
+
+    // This assumes that we never update the application palette
+    auto palette = QApplication::palette();
+
+    if (this->isLightTheme())
+    {
+        palette.setColor(QPalette::Window, this->window.background);
+        palette.setColor(QPalette::Base, {0xe9, 0xe9, 0xe9});
+        palette.setColor(QPalette::AlternateBase, {0xe0, 0xe0, 0xe0});
+        palette.setColor(QPalette::Button, {0xd9, 0xd9, 0xd9});
+        palette.setColor(QPalette::Text, this->window.text);
+        palette.setColor(QPalette::WindowText, this->window.text);
+        palette.setColor(QPalette::ButtonText, this->window.text);
+        palette.setColor(QPalette::BrightText, Qt::red);
+        palette.setColor(QPalette::ToolTipBase, Qt::white);
+        palette.setColor(QPalette::ToolTipText, Qt::black);
+        palette.setColor(QPalette::Link, Qt::blue);
+        palette.setColor(QPalette::LinkVisited, Qt::magenta);
+        palette.setColor(QPalette::Highlight, {42, 130, 218});
+        palette.setColor(QPalette::HighlightedText, Qt::white);
+        palette.setColor(QPalette::PlaceholderText, {0x90, 0x90, 0x90});
+    }
+    this->palette = palette;
 }
 
 bool Theme::isAutoReloading() const
@@ -570,10 +622,11 @@ void Theme::normalizeColor(QColor &color) const
         if (color.lightnessF() > 0.4 && color.hueF() > 0.1 &&
             color.hueF() < 0.33333)
         {
-            color.setHslF(color.hueF(), color.saturationF(),
-                          color.lightnessF() - sin((color.hueF() - 0.1) /
-                                                   (0.3333 - 0.1) * 3.14159) *
-                                                   color.saturationF() * 0.4);
+            color.setHslF(
+                color.hueF(), color.saturationF(),
+                color.lightnessF() - sin((color.hueF() - 0.1) / (0.3333 - 0.1) *
+                                         std::numbers::pi) *
+                                         color.saturationF() * 0.4);
         }
     }
     else
@@ -586,18 +639,18 @@ void Theme::normalizeColor(QColor &color) const
         if (color.lightnessF() < 0.6 && color.hueF() > 0.54444 &&
             color.hueF() < 0.83333)
         {
-            color.setHslF(
-                color.hueF(), color.saturationF(),
-                color.lightnessF() + sin((color.hueF() - 0.54444) /
-                                         (0.8333 - 0.54444) * 3.14159) *
-                                         color.saturationF() * 0.4);
+            color.setHslF(color.hueF(), color.saturationF(),
+                          color.lightnessF() +
+                              sin((color.hueF() - 0.54444) /
+                                  (0.8333 - 0.54444) * std::numbers::pi) *
+                                  color.saturationF() * 0.4);
         }
     }
 }
 
 Theme *getTheme()
 {
-    return getIApp()->getThemes();
+    return getApp()->getThemes();
 }
 
 }  // namespace chatterino

@@ -77,11 +77,7 @@ QString ResizingTextEdit::textUnderCursor(bool *hadSpace) const
 
     auto textUpToCursor = currentText.left(tc.selectionStart());
 
-#if QT_VERSION >= QT_VERSION_CHECK(5, 15, 0)
     auto words = QStringView{textUpToCursor}.split(' ');
-#else
-    auto words = textUpToCursor.splitRef(' ');
-#endif
     if (words.size() == 0)
     {
         return QString();
@@ -135,6 +131,18 @@ bool ResizingTextEdit::eventFilter(QObject *obj, QEvent *event)
 }
 void ResizingTextEdit::keyPressEvent(QKeyEvent *event)
 {
+#ifdef Q_OS_MACOS
+    if ((event->modifiers() == Qt::ControlModifier) &&
+        (event->key() == Qt::Key_Backspace))
+    {
+        QTextCursor cursor = this->textCursor();
+        cursor.movePosition(QTextCursor::StartOfLine, QTextCursor::KeepAnchor);
+        cursor.removeSelectedText();
+        this->setTextCursor(cursor);
+        return;
+    }
+#endif
+
     event->ignore();
 
     this->keyPressed.invoke(event);

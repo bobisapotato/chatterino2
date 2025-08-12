@@ -1,7 +1,7 @@
 #include "singletons/Logging.hpp"
 
+#include "messages/Message.hpp"
 #include "singletons/helper/LoggingChannel.hpp"
-#include "singletons/Paths.hpp"
 #include "singletons/Settings.hpp"
 
 #include <QDir>
@@ -32,8 +32,13 @@ Logging::Logging(Settings &settings)
 }
 
 void Logging::addMessage(const QString &channelName, MessagePtr message,
-                         const QString &platformName)
+                         const QString &platformName, const QString &streamID)
 {
+    if (platformName.isEmpty())
+    {
+        return;
+    }
+
     this->threadGuard.guard();
 
     if (!getSettings()->enableLogging)
@@ -53,24 +58,40 @@ void Logging::addMessage(const QString &channelName, MessagePtr message,
     if (platIt == this->loggingChannels_.end())
     {
         auto *channel = new LoggingChannel(channelName, platformName);
-        channel->addMessage(message);
+        channel->addMessage(message, streamID);
         auto map = std::map<QString, std::unique_ptr<LoggingChannel>>();
         this->loggingChannels_[platformName] = std::move(map);
         auto &ref = this->loggingChannels_.at(platformName);
-        ref.emplace(channelName, std::move(channel));
+        ref.emplace(channelName, channel);
         return;
     }
     auto chanIt = platIt->second.find(channelName);
     if (chanIt == platIt->second.end())
     {
         auto *channel = new LoggingChannel(channelName, platformName);
-        channel->addMessage(message);
-        platIt->second.emplace(channelName, std::move(channel));
+        channel->addMessage(message, streamID);
+        platIt->second.emplace(channelName, channel);
     }
     else
     {
-        chanIt->second->addMessage(message);
+        chanIt->second->addMessage(message, streamID);
     }
+}
+
+void Logging::closeChannel(const QString &channelName,
+                           const QString &platformName)
+{
+    if (platformName.isEmpty())
+    {
+        return;
+    }
+
+    auto platIt = this->loggingChannels_.find(platformName);
+    if (platIt == this->loggingChannels_.end())
+    {
+        return;
+    }
+    platIt->second.erase(channelName);
 }
 
 }  // namespace chatterino

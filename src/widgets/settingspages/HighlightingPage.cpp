@@ -1,4 +1,4 @@
-#include "HighlightingPage.hpp"
+#include "widgets/settingspages/HighlightingPage.hpp"
 
 #include "Application.hpp"
 #include "controllers/highlights/BadgeHighlightModel.hpp"
@@ -10,7 +10,6 @@
 #include "controllers/highlights/UserHighlightModel.hpp"
 #include "providers/colors/ColorProvider.hpp"
 #include "singletons/Settings.hpp"
-#include "singletons/Theme.hpp"
 #include "util/Helpers.hpp"
 #include "util/LayoutCreator.hpp"
 #include "widgets/dialogs/BadgePickerDialog.hpp"
@@ -25,24 +24,22 @@
 #include <QTableView>
 #include <QTabWidget>
 
-#define ALWAYS_PLAY "Play highlight sound even when Chatterino is focused"
-
 namespace chatterino {
 
 namespace {
-    // Add additional badges for highlights here
-    QList<DisplayBadge> availableBadges = {
-        {"Broadcaster", "broadcaster"},
-        {"Admin", "admin"},
-        {"Staff", "staff"},
-        {"Moderator", "moderator"},
-        {"Verified", "partner"},
-        {"VIP", "vip"},
-        {"Founder", "founder"},
-        {"Subscriber", "subscriber"},
-        {"Predicted Blue", "predictions/blue-1,predictions/blue-2"},
-        {"Predicted Pink", "predictions/pink-2,predictions/pink-1"},
-    };
+// Add additional badges for highlights here
+QList<DisplayBadge> availableBadges = {
+    {"Broadcaster", "broadcaster"},
+    {"Admin", "admin"},
+    {"Staff", "staff"},
+    {"Moderator", "moderator"},
+    {"Verified", "partner"},
+    {"VIP", "vip"},
+    {"Founder", "founder"},
+    {"Subscriber", "subscriber"},
+    {"Predicted Blue", "predictions/blue-1,predictions/blue-2"},
+    {"Predicted Pink", "predictions/pink-2,predictions/pink-1"},
+};
 }  // namespace
 
 HighlightingPage::HighlightingPage()
@@ -113,8 +110,8 @@ HighlightingPage::HighlightingPage()
                 pingUsers.emplace<QLabel>(
                     "Play notification sounds and highlight messages from "
                     "certain users.\n"
-                    "User highlights are prioritized badge highlights, but "
-                    "under message highlights.");
+                    "User highlights are prioritized over badge highlights, "
+                    "but under message highlights.");
                 EditableModelView *view =
                     pingUsers
                         .emplace<EditableModelView>(
@@ -312,8 +309,9 @@ HighlightingPage::HighlightingPage()
                 this->managedConnections_);
         }
 
-        layout.append(createCheckBox(ALWAYS_PLAY,
-                                     getSettings()->highlightAlwaysPlaySound));
+        layout.append(createCheckBox(
+            "Play highlight sound even when Chatterino is focused",
+            getSettings()->highlightAlwaysPlaySound));
         layout.append(createCheckBox(
             "Flash taskbar only stops highlighting when Chatterino is focused",
             getSettings()->longAlerts));

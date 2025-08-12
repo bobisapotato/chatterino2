@@ -11,9 +11,12 @@
 
 #include <QFormLayout>
 #include <QHeaderView>
+#include <QKeySequenceEdit>
 #include <QLabel>
 #include <QMessageBox>
 #include <QTableView>
+
+#include <array>
 
 namespace {
 
@@ -22,7 +25,7 @@ using namespace chatterino;
 void tableCellClicked(const QModelIndex &clicked, EditableModelView *view,
                       HotkeyModel *model)
 {
-    auto hotkey = getIApp()->getHotkeys()->getHotkeyByName(
+    auto hotkey = getApp()->getHotkeys()->getHotkeyByName(
         clicked.siblingAtColumn(0).data(Qt::EditRole).toString());
     if (!hotkey)
     {
@@ -34,8 +37,8 @@ void tableCellClicked(const QModelIndex &clicked, EditableModelView *view,
     if (wasAccepted)
     {
         auto newHotkey = dialog.data();
-        getIApp()->getHotkeys()->replaceHotkey(hotkey->name(), newHotkey);
-        getIApp()->getHotkeys()->save();
+        getApp()->getHotkeys()->replaceHotkey(hotkey->name(), newHotkey);
+        getApp()->getHotkeys()->save();
     }
 }
 
@@ -48,9 +51,10 @@ KeyboardSettingsPage::KeyboardSettingsPage()
     LayoutCreator<KeyboardSettingsPage> layoutCreator(this);
     auto layout = layoutCreator.emplace<QVBoxLayout>();
 
-    auto *model = getIApp()->getHotkeys()->createModel(nullptr);
+    auto *model = getApp()->getHotkeys()->createModel(nullptr);
     EditableModelView *view =
         layout.emplace<EditableModelView>(model).getElement();
+    this->view_ = view;
 
     view->setTitles({"Hotkey name", "Keybinding"});
     view->getTableView()->horizontalHeader()->setVisible(true);
@@ -68,15 +72,29 @@ KeyboardSettingsPage::KeyboardSettingsPage()
         if (wasAccepted)
         {
             auto newHotkey = dialog.data();
-            getIApp()->getHotkeys()->hotkeys_.append(newHotkey);
-            getIApp()->getHotkeys()->save();
+            getApp()->getHotkeys()->hotkeys_.append(newHotkey);
+            getApp()->getHotkeys()->save();
         }
     });
 
-    QObject::connect(view->getTableView(), &QTableView::doubleClicked,
+    QObject::connect(view_->getTableView(), &QTableView::doubleClicked,
                      [view, model](const QModelIndex &clicked) {
                          tableCellClicked(clicked, view, model);
                      });
+
+    auto *keySequenceInput = new QKeySequenceEdit(this);
+
+#if QT_VERSION >= QT_VERSION_CHECK(6, 4, 0)
+    keySequenceInput->setClearButtonEnabled(true);
+#endif
+    auto *searchText = new QLabel("Search keybind:", this);
+
+    QObject::connect(keySequenceInput, &QKeySequenceEdit::keySequenceChanged,
+                     [view](const QKeySequence &keySequence) {
+                         view->filterSearchResultsHotkey(keySequence);
+                     });
+    view->addCustomButton(searchText);
+    view->addCustomButton(keySequenceInput);
 
     auto *resetEverything = new QPushButton("Reset to defaults");
     QObject::connect(resetEverything, &QPushButton::clicked, [this]() {
@@ -87,10 +105,53 @@ KeyboardSettingsPage::KeyboardSettingsPage()
 
         if (reply == QMessageBox::Yes)
         {
-            getIApp()->getHotkeys()->resetToDefaults();
+            getApp()->getHotkeys()->resetToDefaults();
         }
     });
     view->addCustomButton(resetEverything);
+
+    // We only check this once since a user *should* not have the ability to create a new hotkey with a deprecated or removed action
+    // However, we also don't update this after the user has deleted a hotkey. This is a big lift that should probably be solved on the model level rather
+    // than individually here. Same goes for marking specific rows as deprecated/removed
+    const auto &removedOrDeprecatedHotkeys =
+        getApp()->getHotkeys()->removedOrDeprecatedHotkeys();
+
+    if (!removedOrDeprecatedHotkeys.empty())
+    {
+        QString warningMessage =
+            "Some of your hotkeys use deprecated actions and will not "
+            "work as expected: ";
+
+        bool first = true;
+        for (const auto &hotkeyName : removedOrDeprecatedHotkeys)
+        {
+            if (!first)
+            {
+                warningMessage.append(',');
+            }
+            warningMessage.append(' ');
+            warningMessage.append('"');
+            warningMessage.append(hotkeyName);
+            warningMessage.append('"');
+
+            first = false;
+        }
+        warningMessage.append('.');
+        auto deprecatedWarning = layout.emplace<QLabel>(warningMessage);
+        deprecatedWarning->setStyleSheet("color: yellow");
+        deprecatedWarning->setWordWrap(true);
+        auto deprecatedWarning2 = layout.emplace<QLabel>(
+            "You can ignore this warning after you have removed or edited the "
+            "above-mentioned hotkeys.");
+        deprecatedWarning2->setStyleSheet("color: yellow");
+    }
+}
+
+bool KeyboardSettingsPage::filterElements(const QString &query)
+{
+    std::array fields{0};
+
+    return this->view_->filterSearchResults(query, fields);
 }
 
 }  // namespace chatterino

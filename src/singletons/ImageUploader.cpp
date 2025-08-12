@@ -1,13 +1,13 @@
 #include "singletons/ImageUploader.hpp"
 
 #include "Application.hpp"
+#include "common/Channel.hpp"
 #include "common/Env.hpp"
 #include "common/network/NetworkRequest.hpp"
 #include "common/network/NetworkResult.hpp"
 #include "common/QLogging.hpp"
 #include "debug/Benchmark.hpp"
 #include "messages/MessageBuilder.hpp"
-#include "providers/twitch/TwitchMessageBuilder.hpp"
 #include "singletons/Paths.hpp"
 #include "singletons/Settings.hpp"
 #include "util/CombinePath.hpp"
@@ -24,10 +24,10 @@
 
 #include <utility>
 
-#define UPLOAD_DELAY 2000
-// Delay between uploads in milliseconds
-
 namespace {
+
+// Delay between uploads in milliseconds
+constexpr int UPLOAD_DELAY = 2000;
 
 std::optional<QByteArray> convertToPng(const QImage &image)
 {
@@ -45,7 +45,56 @@ std::optional<QByteArray> convertToPng(const QImage &image)
 
 }  // namespace
 
+namespace chatterino::imageuploader::detail {
+
+// extracting link to either image or its deletion from response body
+QString getJSONValue(QJsonValue responseJson, QStringView jsonPattern)
+{
+    for (auto key : jsonPattern.tokenize(u'.'))
+    {
+        if (responseJson.isObject())
+        {
+            responseJson = responseJson[key];
+        }
+        else if (responseJson.isArray())
+        {
+            bool ok = false;
+            auto idx = key.toLongLong(&ok);
+            if (ok)
+            {
+                responseJson = responseJson[idx];
+            }
+        }
+        else
+        {
+            // we reached a scalar value, no need to continue
+            break;
+        }
+    }
+    return responseJson.toString();
+}
+
+QString getLinkFromResponse(const NetworkResult &response, QString pattern)
+{
+    QRegularExpression regExp("{(.+)}",
+                              QRegularExpression::InvertedGreedinessOption);
+    auto match = regExp.match(pattern);
+
+    auto jsonRoot = response.parseJsonValue();
+    while (match.hasMatch())
+    {
+        pattern.replace(match.captured(0),
+                        getJSONValue(jsonRoot, match.capturedView(1)));
+        match = regExp.match(pattern);
+    }
+    return pattern;
+}
+
+}  // namespace chatterino::imageuploader::detail
+
 namespace chatterino {
+
+using namespace imageuploader::detail;
 
 // logging information on successful uploads to a json file
 void ImageUploader::logToFile(const QString &originalFilePath,
@@ -54,7 +103,7 @@ void ImageUploader::logToFile(const QString &originalFilePath,
 {
     const QString logFileName =
         combinePath((getSettings()->logPath.getValue().isEmpty()
-                         ? getIApp()->getPaths().messageLogDirectory
+                         ? getApp()->getPaths().messageLogDirectory
                          : getSettings()->logPath),
                     "ImageUploader.json");
 
@@ -64,8 +113,8 @@ void ImageUploader::logToFile(const QString &originalFilePath,
         logReadFile.open(QIODevice::ReadWrite | QIODevice::Text);
     if (!isLogFileOkay)
     {
-        channel->addMessage(makeSystemMessage(
-            QString("Failed to open log file with links at ") + logFileName));
+        channel->addSystemMessage(
+            QString("Failed to open log file with links at ") + logFileName);
         return;
     }
     auto logs = logReadFile.readAll();
@@ -98,35 +147,6 @@ void ImageUploader::logToFile(const QString &originalFilePath,
     logSaveFile.commit();
 }
 
-// extracting link to either image or its deletion from response body
-QString getJSONValue(QJsonValue responseJson, QString jsonPattern)
-{
-    for (const QString &key : jsonPattern.split("."))
-    {
-        responseJson = responseJson[key];
-    }
-    return responseJson.toString();
-}
-
-QString getLinkFromResponse(NetworkResult response, QString pattern)
-{
-    QRegularExpression regExp("{(.+)}",
-                              QRegularExpression::InvertedGreedinessOption);
-    auto match = regExp.match(pattern);
-
-    while (match.hasMatch())
-    {
-        pattern.replace(match.captured(0),
-                        getJSONValue(response.parseJson(), match.captured(1)));
-        match = regExp.match(pattern);
-    }
-    return pattern;
-}
-
-void ImageUploader::save()
-{
-}
-
 void ImageUploader::sendImageUploadRequest(RawImageData imageData,
                                            ChannelPtr channel,
                                            QPointer<ResizingTextEdit> textEdit)
@@ -150,7 +170,7 @@ void ImageUploader::sendImageUploadRequest(RawImageData imageData,
     part.setHeader(QNetworkRequest::ContentLengthHeader,
                    QVariant(imageData.data.length()));
     part.setHeader(QNetworkRequest::ContentDispositionHeader,
-                   QString("form-data; name=\"%1\"; filename=\"control_v.%2\"")
+                   QString(R"(form-data; name="%1"; filename="control_v.%2")")
                        .arg(formField)
                        .arg(imageData.format));
     payload->append(part);
@@ -197,7 +217,7 @@ void ImageUploader::handleFailedUpload(const NetworkResult &result,
         }
     }
 
-    channel->addMessage(makeSystemMessage(errorMessage));
+    channel->addSystemMessage(errorMessage);
     // NOTE: We abort any future uploads on failure. Should this be handled differently?
     while (!this->uploadQueue_.empty())
     {
@@ -239,7 +259,7 @@ void ImageUploader::handleSuccessfulUpload(const NetworkResult &result,
     auto timeToUpload = this->uploadQueue_.size() * (UPLOAD_DELAY / 1000 + 1);
     MessageBuilder builder(imageUploaderResultMessage, link, deletionLink,
                            this->uploadQueue_.size(), timeToUpload);
-    channel->addMessage(builder.release());
+    channel->addMessage(builder.release(), MessageContext::Original);
     if (this->uploadQueue_.empty())
     {
         this->uploadMutex_.unlock();
@@ -376,8 +396,7 @@ void ImageUploader::upload(std::queue<RawImageData> images, ChannelPtr channel,
     BenchmarkGuard benchmarkGuard("upload");
     if (!this->uploadMutex_.tryLock())
     {
-        channel->addMessage(makeSystemMessage(
-            QString("Please wait until the upload finishes.")));
+        channel->addSystemMessage("Please wait until the upload finishes.");
         return;
     }
 
@@ -386,7 +405,7 @@ void ImageUploader::upload(std::queue<RawImageData> images, ChannelPtr channel,
 
     std::swap(this->uploadQueue_, images);
 
-    channel->addMessage(makeSystemMessage("Started upload..."));
+    channel->addSystemMessage("Started upload...");
 
     this->sendImageUploadRequest(this->uploadQueue_.front(), std::move(channel),
                                  std::move(outputTextEdit));

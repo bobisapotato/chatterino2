@@ -3,18 +3,20 @@
 #include "controllers/filters/lang/Filter.hpp"
 #include "controllers/filters/lang/Types.hpp"
 #include "controllers/highlights/HighlightController.hpp"
+#include "messages/MessageBuilder.hpp"
+#include "mocks/BaseApplication.hpp"
 #include "mocks/Channel.hpp"
 #include "mocks/ChatterinoBadges.hpp"
+#include "mocks/Emotes.hpp"
 #include "mocks/EmptyApplication.hpp"
+#include "mocks/Logging.hpp"
 #include "mocks/TwitchIrcServer.hpp"
 #include "mocks/UserData.hpp"
 #include "providers/ffz/FfzBadges.hpp"
 #include "providers/seventv/SeventvBadges.hpp"
 #include "providers/twitch/TwitchBadge.hpp"
-#include "providers/twitch/TwitchMessageBuilder.hpp"
-#include "singletons/Emotes.hpp"
+#include "Test.hpp"
 
-#include <gtest/gtest.h>
 #include <QColor>
 #include <QVariant>
 
@@ -22,13 +24,16 @@ using namespace chatterino;
 using namespace chatterino::filters;
 using chatterino::mock::MockChannel;
 
-TypingContext typingContext = MESSAGE_TYPING_CONTEXT;
-
 namespace {
 
-class MockApplication : mock::EmptyApplication
+class MockApplication : public mock::BaseApplication
 {
 public:
+    MockApplication()
+        : highlights(this->settings, &this->accounts)
+    {
+    }
+
     IEmotes *getEmotes() override
     {
         return &this->emotes;
@@ -69,8 +74,14 @@ public:
         return &this->highlights;
     }
 
+    ILogging *getChatLogger() override
+    {
+        return &this->logging;
+    }
+
+    mock::EmptyLogging logging;
     AccountController accounts;
-    Emotes emotes;
+    mock::Emotes emotes;
     mock::UserDataController userData;
     mock::MockTwitchIrcServer twitch;
     mock::ChatterinoBadges chatterinoBadges;
@@ -101,7 +112,7 @@ namespace chatterino::filters {
 
 std::ostream &operator<<(std::ostream &os, Type t)
 {
-    os << qUtf8Printable(typeToString(t));
+    os << typeToString(t);
     return os;
 }
 
@@ -138,8 +149,8 @@ TEST(Filters, Validity)
         auto filterResult = Filter::fromString(input);
         bool isValid = std::holds_alternative<Filter>(filterResult);
         EXPECT_EQ(isValid, expected)
-            << "Filter::fromString( " << qUtf8Printable(input)
-            << " ) should be " << (expected ? "valid" : "invalid");
+            << "Filter::fromString( " << input << " ) should be "
+            << (expected ? "valid" : "invalid");
     }
 }
 
@@ -168,15 +179,15 @@ TEST(Filters, TypeSynthesis)
     {
         auto filterResult = Filter::fromString(input);
         bool isValid = std::holds_alternative<Filter>(filterResult);
-        ASSERT_TRUE(isValid) << "Filter::fromString( " << qUtf8Printable(input)
-                             << " ) is invalid";
+        ASSERT_TRUE(isValid)
+            << "Filter::fromString( " << input << " ) is invalid";
 
         auto filter = std::move(std::get<Filter>(filterResult));
         T type = filter.returnType();
         EXPECT_EQ(type, expected)
-            << "Filter{ " << qUtf8Printable(input) << " } has type " << type
-            << " instead of " << expected << ".\nDebug: "
-            << qUtf8Printable(filter.debugString(typingContext));
+            << "Filter{ " << input << " } has type " << type << " instead of "
+            << expected
+            << ".\nDebug: " << filter.debugString(MESSAGE_TYPING_CONTEXT);
     }
 }
 
@@ -244,17 +255,16 @@ TEST(Filters, Evaluation)
     {
         auto filterResult = Filter::fromString(input);
         bool isValid = std::holds_alternative<Filter>(filterResult);
-        ASSERT_TRUE(isValid) << "Filter::fromString( " << qUtf8Printable(input)
-                             << " ) is invalid";
+        ASSERT_TRUE(isValid)
+            << "Filter::fromString( " << input << " ) is invalid";
 
         auto filter = std::move(std::get<Filter>(filterResult));
         auto result = filter.execute(contextMap);
 
         EXPECT_EQ(result, expected)
-            << "Filter{ " << qUtf8Printable(input) << " } evaluated to "
-            << qUtf8Printable(result.toString()) << " instead of "
-            << qUtf8Printable(expected.toString()) << ".\nDebug: "
-            << qUtf8Printable(filter.debugString(typingContext));
+            << "Filter{ " << input << " } evaluated to " << result.toString()
+            << " instead of " << expected.toString()
+            << ".\nDebug: " << filter.debugString(MESSAGE_TYPING_CONTEXT);
     }
 }
 
@@ -275,9 +285,9 @@ TEST_F(FiltersF, TypingContextChecks)
 
     QString originalMessage = privmsg->content();
 
-    TwitchMessageBuilder builder(&channel, privmsg, MessageParseArgs{});
+    auto [msg, alert] = MessageBuilder::makeIrcMessage(
+        &channel, privmsg, MessageParseArgs{}, originalMessage, 0);
 
-    auto msg = builder.build();
     EXPECT_NE(msg.get(), nullptr);
 
     auto contextMap = buildContextMap(msg, &channel);
@@ -354,20 +364,18 @@ TEST_F(FiltersF, ExpressionDebug)
     {
         const auto filterResult = Filter::fromString(input);
         const auto *filter = std::get_if<Filter>(&filterResult);
-        EXPECT_NE(filter, nullptr)
-            << "Filter::fromString(" << qUtf8Printable(input)
-            << ") did not build a proper filter";
+        EXPECT_NE(filter, nullptr) << "Filter::fromString(" << input
+                                   << ") did not build a proper filter";
 
-        const auto actualDebugString = filter->debugString(typingContext);
+        const auto actualDebugString =
+            filter->debugString(MESSAGE_TYPING_CONTEXT);
         EXPECT_EQ(actualDebugString, debugString)
-            << "filter->debugString() on '" << qUtf8Printable(input)
-            << "' should be '" << qUtf8Printable(debugString) << "', but got '"
-            << qUtf8Printable(actualDebugString) << "'";
+            << "filter->debugString() on '" << input << "' should be '"
+            << debugString << "', but got '" << actualDebugString << "'";
 
         const auto actualFilterString = filter->filterString();
         EXPECT_EQ(actualFilterString, filterString)
-            << "filter->filterString() on '" << qUtf8Printable(input)
-            << "' should be '" << qUtf8Printable(filterString) << "', but got '"
-            << qUtf8Printable(actualFilterString) << "'";
+            << "filter->filterString() on '" << input << "' should be '"
+            << filterString << "', but got '" << actualFilterString << "'";
     }
 }

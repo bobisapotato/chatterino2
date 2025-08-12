@@ -4,24 +4,30 @@
 #include "common/Atomic.hpp"
 #include "common/FlagsEnum.hpp"
 
+#include <pajlada/signals/scoped-connection.hpp>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QString>
 
+#include <cstddef>
+#include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
+#include <vector>
 
 namespace chatterino {
 
 class ImageSet;
 class Channel;
 namespace seventv::eventapi {
-    struct EmoteAddDispatch;
-    struct EmoteUpdateDispatch;
-    struct EmoteRemoveDispatch;
+struct EmoteAddDispatch;
+struct EmoteUpdateDispatch;
+struct EmoteRemoveDispatch;
 }  // namespace seventv::eventapi
 
 // https://github.com/SevenTV/API/blob/a84e884b5590dbb5d91a5c6b3548afabb228f385/data/model/emote-set.model.go#L29-L36
-enum class SeventvActiveEmoteFlag : int64_t {
+enum class SeventvActiveEmoteFlag : std::int64_t {
     None = 0LL,
 
     // Emote is zero-width
@@ -80,7 +86,7 @@ using SeventvEmoteSetFlags = FlagsEnum<SeventvEmoteSetFlag>;
 
 namespace seventv::detail {
 
-    EmoteMap parseEmotes(const QJsonArray &emoteSetEmotes, bool isGlobal);
+EmoteMap parseEmotes(const QJsonArray &emoteSetEmotes, bool isGlobal);
 
 }  // namespace seventv::detail
 
@@ -102,7 +108,7 @@ public:
     static void loadChannelEmotes(
         const std::weak_ptr<Channel> &channel, const QString &channelId,
         std::function<void(EmoteMap &&, ChannelInfo)> callback,
-        bool manualRefresh);
+        bool manualRefresh, bool cacheHit);
 
     /**
      * Adds an emote to the `map` if it's valid.
@@ -147,11 +153,16 @@ public:
      * Creates an image set from a 7TV emote or badge.
      *
      * @param emoteData { host: { files: [], url } }
+     * @param useStatic use static version if possible
      */
-    static ImageSet createImageSet(const QJsonObject &emoteData);
+    static ImageSet createImageSet(const QJsonObject &emoteData,
+                                   bool useStatic);
 
 private:
     Atomic<std::shared_ptr<const EmoteMap>> global_;
+
+    std::vector<std::unique_ptr<pajlada::Signals::ScopedConnection>>
+        managedConnections;
 };
 
 }  // namespace chatterino
